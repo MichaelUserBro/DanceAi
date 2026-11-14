@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.0",
+  "dance_id": "slow_waltz",
+  "video_assessment": {
+    "status": "ok",
+    "quality": "acceptable",
+    "couple_description": "Пара в центре кадра в начале записи: партнёр в чёрной рубашке, партнёрша в синем платье.",
+    "music_source": "audio_and_analysis",
+    "issues": [
+      "Примерно треть времени пара на дальней стороне зала — работа стоп в это время видна плохо."
+    ]
+  },
+  "figures": [
+    { "figure_id": "natural_turn", "name_ru": "Правый поворот", "name_en": "Natural Turn", "count": 3, "quality": "partial", "confidence": "high", "comment": "Поворот выполнен, но без подъёма на 2–3 и с недоворотом на втором полуповороте." },
+    { "figure_id": "closed_change_nat_to_rev", "name_ru": "Правая переменка", "name_en": "Closed Change (Natural to Reverse)", "count": 2, "quality": "partial", "confidence": "high", "comment": "Приставка у партнёрши неполная." },
+    { "figure_id": "reverse_turn", "name_ru": "Левый поворот", "name_en": "Reverse Turn", "count": 2, "quality": "poor", "confidence": "high", "comment": "Недоворот, пара уходит с линии танца, рамка разъезжается." },
+    { "figure_id": "whisk", "name_ru": "Виск", "name_en": "Whisk", "count": 2, "quality": "partial", "confidence": "high", "comment": "Позиция променада открыта слишком широко, голова партнёрши не в линии." },
+    { "figure_id": "chasse_from_pp", "name_ru": "Шоссе (из променада)", "name_en": "Chasse from Promenade Position", "count": 2, "quality": "partial", "confidence": "medium", "comment": "Шоссе на одном уровне, без подъёма." },
+    { "figure_id": "natural_spin_turn", "name_ru": "Спин", "name_en": "Natural Spin Turn", "count": 1, "quality": "poor", "confidence": "medium", "comment": "Потеря баланса на пивоте, партнёрша отстаёт." },
+    { "figure_id": null, "name_ru": "Поступательное шоссе вправо", "name_en": "Progressive Chasse to Right", "count": 1, "quality": "partial", "confidence": "low", "comment": "Вероятно, это поступательное шоссе вправо; видно частично." }
+  ],
+  "criteria_results": [
+    { "criterion_id": "music_timing", "couple": "partial", "leader": "partial", "follower": "partial", "comment": "В основном в музыку, но на 0:48–0:55 пара опережает сильную долю." },
+    { "criterion_id": "couple_quality", "couple": "partial", "leader": "partial", "follower": "poor", "comment": "Рамка держится в начале, к середине локти партнёра опускаются, партнёрша висит на руке." },
+    { "criterion_id": "emotion_character", "couple": "poor", "leader": "partial", "follower": "poor", "comment": "Напряжённые лица, взгляд вниз; плавности и мягкости вальса нет." },
+    { "criterion_id": "figure_execution", "couple": "partial", "leader": null, "follower": null, "comment": "Фигуры узнаваемы, но повороты недокручены, левый поворот уводит с линии." },
+    { "criterion_id": "sixth_position", "couple": "partial", "leader": "partial", "follower": "good", "comment": "У партнёра стопы разворачиваются наружу на приставках." },
+    { "criterion_id": "soft_knees", "couple": "partial", "leader": "good", "follower": "poor", "comment": "Колени партнёрши прямые на шагах назад." },
+    { "criterion_id": "clear_closes", "couple": "partial", "leader": "good", "follower": "partial", "comment": "Партнёрша не доводит стопу до опорной в переменках." },
+    { "criterion_id": "step_completion", "couple": "partial", "leader": "partial", "follower": "partial", "comment": "Шаг часто обрывается без подготовки к следующему." },
+    { "criterion_id": "swing", "couple": "partial", "leader": "partial", "follower": "partial", "comment": "Свинг есть в правых поворотах, в виске и шоссе корпус прямой." },
+    { "criterion_id": "rise_and_fall", "couple": "poor", "leader": "poor", "follower": "poor", "comment": "Пара движется почти на одном уровне, снижения в конце такта нет." },
+    { "criterion_id": "steps_up_toe", "couple": "partial", "leader": "partial", "follower": "partial", "comment": "Шаги на подъёме местами с полной стопы." },
+    { "criterion_id": "steps_down_heel", "couple": "poor", "leader": "poor", "follower": "not_visible", "comment": "Партнёр делает шаг вперёд на счёт 1 с носка. Работу стоп партнёрши на шагах вперёд разглядеть нельзя." },
+    { "criterion_id": "compression", "couple": "poor", "leader": "poor", "follower": "partial", "comment": "Шаг начинается без давления в пол, движение не разгоняется." }
+  ],
+  "errors": [
+    { "severity": "critical", "who": "couple", "component": "technique", "criterion_id": "rise_and_fall", "figure_id": null, "description": "Подъёмов и снижений почти нет: пара движется на одном уровне весь танец." },
+    { "severity": "critical", "who": "leader", "component": "technique", "criterion_id": "steps_down_heel", "figure_id": "natural_turn", "description": "Шаг вперёд на счёт 1 с носка вместо каблука — в правых поворотах (0:05, 0:21, 0:40)." },
+    { "severity": "major", "who": "follower", "component": "partnership", "criterion_id": "couple_quality", "figure_id": null, "description": "С 0:30 партнёрша висит на правой руке партнёра, рамка оседает." },
+    { "severity": "major", "who": "follower", "component": "technique", "criterion_id": "soft_knees", "figure_id": null, "description": "Прямые колени на шагах назад, движение жёсткое, без амортизации." },
+    { "severity": "major", "who": "leader", "component": "technique", "criterion_id": "compression", "figure_id": null, "description": "Нет компрессии перед шагом на счёт 1 — пара не разгоняется." },
+    { "severity": "major", "who": "couple", "component": "music", "criterion_id": "music_timing", "figure_id": "whisk", "description": "На 0:48–0:55 пара опережает музыку: шаг на счёт 1 раньше сильной доли." },
+    { "severity": "major", "who": "couple", "component": "choreography_presentation", "criterion_id": "figure_execution", "figure_id": "reverse_turn", "description": "Недоворот в левом повороте, пара уходит с линии танца к центру." },
+    { "severity": "minor", "who": "follower", "component": "technique", "criterion_id": "clear_closes", "figure_id": "closed_change_nat_to_rev", "description": "Неполная приставка в правой переменке: стопа не доводится до опорной." },
+    { "severity": "minor", "who": "leader", "component": "technique", "criterion_id": "swing", "figure_id": "whisk", "description": "Нет свинга в виске: корпус прямой." },
+    { "severity": "minor", "who": "follower", "component": "choreography_presentation", "criterion_id": "emotion_character", "figure_id": null, "description": "Напряжённое лицо, взгляд вниз — характер вальса не передан." },
+    { "severity": "minor", "who": "leader", "component": "technique", "criterion_id": "sixth_position", "figure_id": "closed_change_nat_to_rev", "description": "Стопы развёрнуты наружу на приставке в переменках." }
+  ],
+  "summary": {
+    "overall_comment": "Схема фигур выучена, пара в целом держится музыки. Главные проблемы — отсутствие подъёмов и снижений и работа стоп на шагах вперёд. К середине танца разрушается рамка.",
+    "leader": {
+      "strengths": ["Уверенно ведёт по схеме фигур.", "Стабильные колени."],
+      "weaknesses": ["Шаги вперёд с носка.", "Нет компрессии.", "Свинг только в правых поворотах."]
+    },
+    "follower": {
+      "strengths": ["Ровная 6-я позиция."],
+      "weaknesses": ["Прямые колени на шагах назад.", "Висит на руке партнёра.", "Неполные приставки."]
+    },
+    "couple": {
+      "strengths": ["Фигуры узнаваемы.", "В основном в музыку."],
+      "weaknesses": ["Нет подъёмов и снижений.", "Рамка оседает к середине.", "Недоворот в левых поворотах."]
+    }
+  },
+  "scores": {
+    "technique": { "couple": 4, "leader": 4, "follower": 4, "comment": "Основные элементы техники вальса — подъёмы и снижения, работа стоп, компрессия — выполняются слабо." },
+    "music": { "couple": 5, "leader": 5, "follower": 5, "comment": "Темп держат, но есть участки опережения сильной доли." },
+    "partnership": { "couple": 4, "leader": 5, "follower": 4, "comment": "Рамка разрушается к середине танца, партнёрша висит на руке." },
+    "choreography_presentation": { "couple": 5, "leader": 5, "follower": 4, "comment": "Фигуры узнаваемы, повороты недокручены, характер вальса не передан." }
+  },
+  "priorities": [
+    "Подъёмы и снижения по тактам — сейчас пара движется на одном уровне.",
+    "Шаг вперёд на счёт 1 с каблука и компрессия у партнёра.",
+    "Рамка до конца композиции: локти партнёра и собственный баланс партнёрши."
+  ],
+  "additional_observations": [
+    "Партнёр часто смотрит под ноги в начале фигур."
+  ]
+}

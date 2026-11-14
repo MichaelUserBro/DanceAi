@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MichaelUserBro/DanceAi/assets/report.schema.json",
+  "title": "DanceAI — отчёт об оценке танца",
+  "description": "Ответ ИИ на анализ видео одной пары. Все тексты — на русском. Поля идут в порядке «сначала наблюдения, потом оценки». Общую оценку считает приложение, а не ИИ.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "dance_id",
+    "video_assessment",
+    "figures",
+    "criteria_results",
+    "errors",
+    "summary",
+    "scores",
+    "priorities",
+    "additional_observations"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0"],
+      "description": "Версия схемы. Всегда \"1.0\"."
+    },
+    "dance_id": {
+      "type": "string",
+      "enum": ["slow_waltz", "quickstep", "cha_cha", "samba"],
+      "description": "id танца из запроса."
+    },
+    "video_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "quality", "couple_description", "music_source", "issues"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["ok", "low_confidence", "unusable"],
+          "description": "ok — можно уверенно оценить большинство критериев; low_confidence — оценка возможна, но часть не видна или видео плохое; unusable — оценить по существу нельзя."
+        },
+        "quality": {
+          "type": "string",
+          "enum": ["good", "acceptable", "poor"],
+          "description": "Насколько хорошо видна пара: расстояние, свет, ракурс, перекрытия."
+        },
+        "couple_description": {
+          "type": "string",
+          "description": "Какую пару оценил ИИ: одежда, где в кадре — чтобы пользователь мог проверить."
+        },
+        "music_source": {
+          "type": "string",
+          "enum": ["audio", "analysis", "audio_and_analysis", "none"],
+          "description": "На что опирался ИИ в оценке музыкальности: сам слышал звук, текстовый анализ музыки, оба, ничего."
+        },
+        "issues": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Проблемы видео и анализа (далеко, темно, ноги не видны, неясно, какая пара, не тот танец, нет музыки). Пусто, если проблем нет."
+        }
+      }
+    },
+    "figures": {
+      "type": "array",
+      "description": "Распознанные фигуры в порядке первого появления.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["figure_id", "name_ru", "name_en", "count", "quality", "confidence", "comment"],
+        "properties": {
+          "figure_id": {
+            "type": ["string", "null"],
+            "description": "id из списка фигур танца; null — фигура не из списка."
+          },
+          "name_ru": { "type": "string" },
+          "name_en": { "type": ["string", "null"] },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Сколько раз фигура исполнена (примерно)."
+          },
+          "quality": { "$ref": "#/$defs/verdict" },
+          "confidence": {
+            "type": "string",
+            "enum": ["high", "medium", "low"],
+            "description": "Уверенность, что фигура распознана правильно."
+          },
+          "comment": {
+            "type": "string",
+            "description": "Коротко: что хорошо и что не так в исполнении."
+          }
+        }
+      }
+    },
+    "criteria_results": {
+      "type": "array",
+      "description": "Вердикт по каждому критерию из запроса (общие + критерии танца), без пропусков.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterion_id", "couple", "leader", "follower", "comment"],
+        "properties": {
+          "criterion_id": { "type": "string", "description": "id критерия из запроса." },
+          "couple": { "$ref": "#/$defs/criterion_verdict" },
+          "leader": {
+            "type": ["string", "null"],
+            "enum": ["good", "partial", "poor", "not_visible", null],
+            "description": "Вердикт для партнёра. null, если у критерия per_person=false."
+          },
+          "follower": {
+            "type": ["string", "null"],
+            "enum": ["good", "partial", "poor", "not_visible", null],
+            "description": "Вердикт для партнёрши. null, если у критерия per_person=false."
+          },
+          "comment": { "type": "string", "description": "Конкретное наблюдение, на котором основан вердикт." }
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "maxItems": 25,
+      "description": "Конкретные ошибки, от самых важных к менее важным. Обычно 10–20; на коротком или плохом видео меньше.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "who", "component", "criterion_id", "figure_id", "description"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "major", "minor"],
+            "description": "critical — грубая, сильно портит танец; major — заметная; minor — мелкая."
+          },
+          "who": { "type": "string", "enum": ["leader", "follower", "couple"] },
+          "component": { "$ref": "#/$defs/component_id" },
+          "criterion_id": { "type": ["string", "null"], "description": "Связанный критерий или null." },
+          "figure_id": { "type": ["string", "null"], "description": "Фигура, в которой видна ошибка, или null." },
+          "description": {
+            "type": "string",
+            "description": "Что именно не так и где (фигура или момент м:сс)."
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["overall_comment", "leader", "follower", "couple"],
+      "properties": {
+        "overall_comment": { "type": "string", "description": "2–4 предложения: общий вывод о танце." },
+        "leader": { "$ref": "#/$defs/person_summary" },
+        "follower": { "$ref": "#/$defs/person_summary" },
+        "couple": { "$ref": "#/$defs/person_summary" }
+      }
+    },
+    "scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["technique", "music", "partnership", "choreography_presentation"],
+      "properties": {
+        "technique": { "$ref": "#/$defs/component_score" },
+        "music": { "$ref": "#/$defs/component_score" },
+        "partnership": { "$ref": "#/$defs/component_score" },
+        "choreography_presentation": { "$ref": "#/$defs/component_score" }
+      }
+    },
+    "priorities": {
+      "type": "array",
+      "maxItems": 3,
+      "items": { "type": "string" },
+      "description": "1–3 главных направления работы («над чем работать»), вытекающих из ошибок. Без упражнений."
+    },
+    "additional_observations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Важное за пределами списка критериев. Может быть пустым."
+    }
+  },
+  "$defs": {
+    "component_id": {
+      "type": "string",
+      "enum": ["technique", "music", "partnership", "choreography_presentation"]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["good", "partial", "poor"],
+      "description": "good — выполняется; partial — частично; poor — не выполняется."
+    },
+    "criterion_verdict": {
+      "type": "string",
+      "enum": ["good", "partial", "poor", "not_visible"],
+      "description": "good — выполняется; partial — частично; poor — не выполняется; not_visible — нельзя оценить по видео."
+    },
+    "person_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strengths", "weaknesses"],
+      "properties": {
+        "strengths": { "type": "array", "items": { "type": "string" } },
+        "weaknesses": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "component_score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["couple", "leader", "follower", "comment"],
+      "properties": {
+        "couple": { "type": "integer", "minimum": 1, "maximum": 10, "description": "Оценка пары. Ставится всегда." },
+        "leader": { "type": ["integer", "null"], "minimum": 1, "maximum": 10, "description": "Оценка партнёра или null, если вклад не разделить." },
+        "follower": { "type": ["integer", "null"], "minimum": 1, "maximum": 10, "description": "Оценка партнёрши или null, если вклад не разделить." },
+        "comment": { "type": "string", "description": "1–2 предложения: за что такая оценка." }
+      }
+    }
+  }
+}

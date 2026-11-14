@@ -1,0 +1,134 @@
+{
+  "version": "1.1",
+  "updated": "2026-11-14",
+  "note": "Обязательный минимум критериев и фигур по танцам MVP. per_person=true — вердикт отдельно для партнёра и партнёрши плюс общий для пары; false — только для пары. id фигур: из английского названия, если оно известно точно, иначе транслитерация русского.",
+  "scale": { "min": 1, "max": 10 },
+  "components": [
+    {
+      "id": "technique",
+      "name_ru": "Техника",
+      "description_ru": "Специфические технические критерии танца: позиции ног, колени, работа стоп, свинг, подъёмы и снижения и т. п."
+    },
+    {
+      "id": "music",
+      "name_ru": "Музыка",
+      "description_ru": "Тайминг, ритм, попадание в музыку."
+    },
+    {
+      "id": "partnership",
+      "name_ru": "Партнёрство",
+      "description_ru": "Рамка, контакт, ведение и следование."
+    },
+    {
+      "id": "choreography_presentation",
+      "name_ru": "Хореография и подача",
+      "description_ru": "Правильность фигур, характер танца, эмоции."
+    }
+  ],
+  "general_criteria": [
+    { "id": "music_timing", "name_ru": "Танцевание в музыку", "component": "music", "per_person": true },
+    { "id": "couple_quality", "name_ru": "Качество пары: как смотрится со стороны, рамка, контакт", "component": "partnership", "per_person": true },
+    { "id": "emotion_character", "name_ru": "Эмоции, соответствующие характеру танца", "component": "choreography_presentation", "per_person": true },
+    { "id": "figure_execution", "name_ru": "Правильное исполнение фигур", "component": "choreography_presentation", "per_person": false }
+  ],
+  "dances": [
+    {
+      "id": "slow_waltz",
+      "name_ru": "Медленный вальс",
+      "name_en": "Slow Waltz",
+      "style": "standard",
+      "criteria": [
+        { "id": "sixth_position", "name_ru": "6-я позиция в ногах", "component": "technique", "per_person": true },
+        { "id": "soft_knees", "name_ru": "Мягкие колени", "component": "technique", "per_person": true },
+        { "id": "clear_closes", "name_ru": "Чёткие приставки", "component": "technique", "per_person": true },
+        { "id": "step_completion", "name_ru": "Окончание шага: подготовка к шагу вперёд и подготовка к шагу назад", "component": "technique", "per_person": true },
+        { "id": "swing", "name_ru": "Наличие свинга", "component": "technique", "per_person": true },
+        { "id": "rise_and_fall", "name_ru": "Подъёмы и снижения", "component": "technique", "per_person": true },
+        { "id": "steps_up_toe", "name_ru": "Шаги сверху — с носка", "component": "technique", "per_person": true },
+        { "id": "steps_down_heel", "name_ru": "Шаги снизу — с каблука", "component": "technique", "per_person": true },
+        { "id": "compression", "name_ru": "Компрессия", "component": "technique", "per_person": true }
+      ],
+      "figures": [
+        { "id": "natural_turn", "name_ru": "Правый поворот", "name_en": "Natural Turn", "note_ru": null },
+        { "id": "reverse_turn", "name_ru": "Левый поворот", "name_en": "Reverse Turn", "note_ru": null },
+        { "id": "closed_change_nat_to_rev", "name_ru": "Правая переменка", "name_en": "Closed Change (Natural to Reverse)", "note_ru": null },
+        { "id": "closed_change_rev_to_nat", "name_ru": "Левая переменка", "name_en": "Closed Change (Reverse to Natural)", "note_ru": null },
+        { "id": "hesitation_change", "name_ru": "Задержанная переменка", "name_en": "Hesitation Change", "note_ru": null },
+        { "id": "whisk", "name_ru": "Виск", "name_en": "Whisk", "note_ru": null },
+        { "id": "chasse_from_pp", "name_ru": "Шоссе (из променада)", "name_en": "Chasse from Promenade Position", "note_ru": null },
+        { "id": "natural_spin_turn", "name_ru": "Спин", "name_en": "Natural Spin Turn", "note_ru": null },
+        { "id": "levyi_valsovyi_povorot", "name_ru": "Левый вальсовый поворот", "name_en": null, "note_ru": "Отдельная фигура, не путать с левым поворотом (Reverse Turn): есть закрещивание ног, поворот более крутой, другая траектория движения." }
+      ]
+    },
+    {
+      "id": "quickstep",
+      "name_ru": "Квикстеп",
+      "name_en": "Quickstep",
+      "style": "standard",
+      "criteria": [
+        { "id": "sixth_position", "name_ru": "6-я позиция в ногах", "component": "technique", "per_person": true },
+        { "id": "soft_knees", "name_ru": "Мягкие колени", "component": "technique", "per_person": true },
+        { "id": "steps_up_toe", "name_ru": "Шаги сверху — с носка", "component": "technique", "per_person": true },
+        { "id": "steps_down_heel", "name_ru": "Шаги снизу — с каблука", "component": "technique", "per_person": true },
+        { "id": "step_completion", "name_ru": "Окончание шага: подготовка к шагу вперёд и подготовка к шагу назад", "component": "technique", "per_person": true },
+        { "id": "first_slow_drive", "name_ru": "Динамика: разгон пары на первом slow", "component": "technique", "per_person": false }
+      ],
+      "figures": [
+        { "id": "quarter_turn_to_right", "name_ru": "Правый четвертной поворот", "name_en": "Quarter Turn to Right", "note_ru": null },
+        { "id": "progressive_chasse", "name_ru": "Поступательное шоссе", "name_en": "Progressive Chasse", "note_ru": null },
+        { "id": "lock_step", "name_ru": "Локстеп шоссе (лок степ)", "name_en": "Lock Step", "note_ru": "Вероятно, одна фигура под двумя названиями." },
+        { "id": "tipli", "name_ru": "Типли", "name_en": null, "note_ru": null },
+        { "id": "tipple_chasse_to_right", "name_ru": "Типль шоссе", "name_en": "Tipple Chasse to Right", "note_ru": null },
+        { "id": "natural_spin_turn", "name_ru": "Спин", "name_en": "Natural Spin Turn", "note_ru": null }
+      ]
+    },
+    {
+      "id": "cha_cha",
+      "name_ru": "Ча-ча-ча",
+      "name_en": "Cha Cha Cha",
+      "style": "latin",
+      "criteria": [
+        { "id": "latin_foot_position", "name_ru": "Латинская позиция ног", "component": "technique", "per_person": true },
+        { "id": "leg_straightening", "name_ru": "Выпрямление ног", "component": "technique", "per_person": true },
+        { "id": "rhythm_in_feet", "name_ru": "Чёткий ритм в ногах", "component": "technique", "per_person": true },
+        { "id": "sharpness", "name_ru": "Резкость движений", "component": "technique", "per_person": true },
+        { "id": "lead", "name_ru": "Ведение (у партнёрши — следование)", "component": "partnership", "per_person": true },
+        { "id": "body_angles", "name_ru": "Ракурсы", "component": "choreography_presentation", "per_person": true }
+      ],
+      "figures": [
+        { "id": "basic_movement", "name_ru": "Основное движение", "name_en": "Basic Movement", "note_ru": null },
+        { "id": "spot_turn", "name_ru": "Сольный поворот", "name_en": "Spot Turn", "note_ru": null },
+        { "id": "underarm_turn", "name_ru": "Поворот под рукой", "name_en": "Underarm Turn", "note_ru": null },
+        { "id": "postupatelnoe_shosse", "name_ru": "Поступательное шоссе", "name_en": null, "note_ru": null },
+        { "id": "chek", "name_ru": "Чек", "name_en": null, "note_ru": null },
+        { "id": "new_york", "name_ru": "Нью-Йорк вперёд и назад", "name_en": "New York", "note_ru": null },
+        { "id": "hand_to_hand", "name_ru": "Рука в руке", "name_en": "Hand to Hand", "note_ru": null },
+        { "id": "three_cha_cha_chas", "name_ru": "Три ча-ча-ча", "name_en": "Three Cha Cha Chas", "note_ru": null },
+        { "id": "hip_twist", "name_ru": "Хип-твист", "name_en": "Hip Twist", "note_ru": null }
+      ]
+    },
+    {
+      "id": "samba",
+      "name_ru": "Самба",
+      "name_en": "Samba",
+      "style": "latin",
+      "criteria": [
+        { "id": "latin_foot_position", "name_ru": "Латинская позиция ног", "component": "technique", "per_person": true },
+        { "id": "leg_straightening", "name_ru": "Выпрямление ног там, где это должно быть (не танцевать на вечно мягких коленях)", "component": "technique", "per_person": true },
+        { "id": "rhythm_in_feet", "name_ru": "Видимость ритма в ногах", "component": "technique", "per_person": true },
+        { "id": "bounce_action", "name_ru": "Баунс-экшен (Bounce action)", "component": "technique", "per_person": true }
+      ],
+      "figures": [
+        { "id": "voltas", "name_ru": "Вольта", "name_en": "Voltas", "note_ru": null },
+        { "id": "whisks", "name_ru": "Виск", "name_en": "Whisks", "note_ru": null },
+        { "id": "krossvolta", "name_ru": "Кроссвольта", "name_en": null, "note_ru": null },
+        { "id": "samba_walks_promenade", "name_ru": "Самба-ход", "name_en": "Samba Walks (Promenade)", "note_ru": null },
+        { "id": "stationary_samba_walks", "name_ru": "Самба-ход на месте", "name_en": "Stationary Samba Walks", "note_ru": null },
+        { "id": "side_samba_walk", "name_ru": "Самба-ход в сторону", "name_en": "Side Samba Walk", "note_ru": null },
+        { "id": "botafogos", "name_ru": "Ботафого вперёд и назад", "name_en": "Botafogos", "note_ru": null },
+        { "id": "verchenie_na_ruku", "name_ru": "Верчение на руку", "name_en": null, "note_ru": null },
+        { "id": "levye_valsovye_povoroty", "name_ru": "Левые вальсовые повороты", "name_en": null, "note_ru": null }
+      ]
+    }
+  ]
+}
