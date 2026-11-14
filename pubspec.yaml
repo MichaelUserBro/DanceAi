@@ -35,6 +35,13 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  file_selector: ^1.1.0
+  flutter_secure_storage: ^11.2.0
+  shared_preferences: ^2.5.6
+  path_provider: ^2.1.6
+  video_player: ^2.14.1
+  video_player_win: ^3.3.1
+  url_launcher: ^6.3.3
 
 dev_dependencies:
   flutter_test:
@@ -94,3 +101,11 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+  fonts:
+    - family: Manrope
+      fonts:
+        - asset: assets/fonts/Manrope.ttf
+    - family: PlayfairDisplay
+      fonts:
+        - asset: assets/fonts/PlayfairDisplay.ttf
