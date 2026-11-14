@@ -372,8 +372,10 @@ class Pill extends StatelessWidget {
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
           const SizedBox(width: 6),
-          Text(label,
-              style: StageText.label(dense ? 11.5 : 12.5, color: color)),
+          Flexible(
+            child: Text(label,
+                style: StageText.label(dense ? 11.5 : 12.5, color: color)),
+          ),
         ],
       ),
     );

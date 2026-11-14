@@ -1,56 +1,89 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../analysis/basic_video_preparer.dart';
+import '../analysis/temp_storage.dart';
 import '../data/app_data.dart';
+import '../settings/secure_key_store.dart';
+import '../settings/settings_store.dart';
 import '../theme/stage_theme.dart';
+import '../ui/screens/home_screen.dart';
 import '../ui/widgets/stage_background.dart';
+import 'app_scope.dart';
 
 class DanceAiApp extends StatefulWidget {
-  const DanceAiApp({super.key});
+  const DanceAiApp({super.key, this.servicesOverride});
+
+  /// Для тестов: готовые сервисы вместо загрузки с устройства.
+  final Future<AppServices>? servicesOverride;
 
   @override
   State<DanceAiApp> createState() => _DanceAiAppState();
 }
 
 class _DanceAiAppState extends State<DanceAiApp> {
-  late final Future<AppData> _data = AppData.load();
+  late final Future<AppServices> _services =
+      widget.servicesOverride ?? _bootstrap();
+
+  static Future<AppServices> _bootstrap() async {
+    final data = await AppData.load();
+    final temp = TempStorage();
+    final settings = SettingsStore(
+      catalog: data.providers,
+      prefs: SharedPrefsStore(),
+      keys: SecureKeyStore(),
+    );
+    await Future.wait([
+      settings.load(),
+      // Остатки прошлых анализов (если приложение закрыли посреди анализа).
+      temp.cleanupStale(),
+    ]);
+    return AppServices(
+      data: data,
+      settings: settings,
+      preparer: const BasicVideoPreparer(),
+      tempStorage: temp,
+      dev: DevState(),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'DanceAI',
-      debugShowCheckedModeBanner: false,
-      theme: buildStageTheme(),
-      home: FutureBuilder<AppData>(
-        future: _data,
-        builder: (context, snap) {
-          if (snap.hasError) {
-            return _Fatal(error: '${snap.error}');
-          }
-          if (!snap.hasData) {
-            return const StageBackground(child: SizedBox.expand());
-          }
-          return StageBackground(
-            child: Center(
-              child: Text('DanceAI', style: StageText.display(40)),
-            ),
-          );
-        },
-      ),
+    return FutureBuilder<AppServices>(
+      future: _services,
+      builder: (context, snap) {
+        final Widget home;
+        if (snap.hasError) {
+          home = const _Fatal();
+        } else if (!snap.hasData) {
+          home = const StageBackground(child: SizedBox.expand());
+        } else {
+          home = const HomeScreen();
+        }
+        final app = MaterialApp(
+          title: 'DanceAI',
+          debugShowCheckedModeBanner: false,
+          theme: buildStageTheme(),
+          home: home,
+        );
+        return snap.hasData ? AppScope(services: snap.data!, child: app) : app;
+      },
     );
   }
 }
 
 class _Fatal extends StatelessWidget {
-  const _Fatal({required this.error});
-  final String error;
+  const _Fatal();
 
   @override
   Widget build(BuildContext context) => StageBackground(
         child: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: Text('Не удалось загрузить данные приложения.\n$error',
-                textAlign: TextAlign.center, style: StageText.body(15)),
+            child: Text(
+              'Не удалось загрузить данные приложения. Переустановите приложение.',
+              textAlign: TextAlign.center,
+              style: StageText.body(15),
+            ),
           ),
         ),
       );

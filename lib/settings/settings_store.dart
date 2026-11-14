@@ -1,0 +1,157 @@
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../analysis/adapter_registry.dart';
+import '../analysis/stub_ai_provider.dart';
+import '../data/providers_catalog.dart';
+import 'secure_key_store.dart';
+
+/// Обычные (не секретные) настройки.
+abstract interface class PrefsStore {
+  Future<String?> getString(String key);
+  Future<bool?> getBool(String key);
+  Future<void> setString(String key, String value);
+  Future<void> setBool(String key, bool value);
+}
+
+class SharedPrefsStore implements PrefsStore {
+  SharedPrefsStore([SharedPreferencesAsync? prefs])
+      : _prefs = prefs ?? SharedPreferencesAsync();
+  final SharedPreferencesAsync _prefs;
+
+  @override
+  Future<String?> getString(String key) => _prefs.getString(key);
+  @override
+  Future<bool?> getBool(String key) => _prefs.getBool(key);
+  @override
+  Future<void> setString(String key, String value) =>
+      _prefs.setString(key, value);
+  @override
+  Future<void> setBool(String key, bool value) => _prefs.setBool(key, value);
+}
+
+/// Для тестов.
+class MemoryPrefsStore implements PrefsStore {
+  final values = <String, Object>{};
+
+  @override
+  Future<String?> getString(String key) async => values[key] as String?;
+  @override
+  Future<bool?> getBool(String key) async => values[key] as bool?;
+  @override
+  Future<void> setString(String key, String value) async => values[key] = value;
+  @override
+  Future<void> setBool(String key, bool value) async => values[key] = value;
+}
+
+/// Настройки ИИ. Обычные значения — в shared_preferences,
+/// ключ — только в [KeyStore]. Сам ключ здесь не хранится:
+/// известно лишь, задан ли он.
+class SettingsStore extends ChangeNotifier {
+  SettingsStore({
+    required this.catalog,
+    required this._prefs,
+    required this.keys,
+  });
+
+  final ProvidersCatalog catalog;
+  final PrefsStore _prefs;
+  final KeyStore keys;
+
+  String? _providerId;
+  final _models = <String, String>{};
+  final _videoMode = <String, bool>{};
+  final _hasKey = <String, bool>{};
+  String _customBaseUrl = '';
+  StubScenario _scenario = StubScenario.normal;
+
+  static const _kProvider = 'provider_id';
+  static const _kCustomUrl = 'custom_base_url';
+  static const _kScenario = 'stub_scenario';
+  static String _kModel(String id) => 'model.$id';
+  static String _kVideo(String id) => 'video_mode.$id';
+
+  Future<void> load() async {
+    _providerId = await _prefs.getString(_kProvider);
+    _customBaseUrl = await _prefs.getString(_kCustomUrl) ?? '';
+    _scenario = StubScenario.fromId(await _prefs.getString(_kScenario));
+    for (final p in catalog.all) {
+      final model = await _prefs.getString(_kModel(p.id));
+      if (model != null) _models[p.id] = model;
+      _videoMode[p.id] = await _prefs.getBool(_kVideo(p.id)) ?? false;
+      final key = await keys.read(p.id);
+      _hasKey[p.id] = key != null && key.isNotEmpty;
+    }
+    if (catalog.byId(_providerId) == null) _providerId = null;
+    notifyListeners();
+  }
+
+  ProviderInfo? get provider => catalog.byId(_providerId);
+
+  String modelFor(String providerId) => _models[providerId] ?? '';
+  bool hasKeyFor(String providerId) => _hasKey[providerId] ?? false;
+  String get customBaseUrl => _customBaseUrl;
+  StubScenario get stubScenario => _scenario;
+
+  /// Адаптер выбранного провайдера умеет передавать видео.
+  bool canSendVideo(ProviderInfo p) =>
+      AdapterRegistry.capabilitiesFor(p.apiType).supportsVideo;
+
+  /// Переключатель «Модель принимает видео со звуком» (с учётом адаптера).
+  bool videoModeFor(ProviderInfo p) =>
+      canSendVideo(p) && (_videoMode[p.id] ?? false);
+
+  bool get wantVideo => provider != null && videoModeFor(provider!);
+
+  /// Выбраны провайдер и модель, задан ключ (и адрес — для «Своего»).
+  bool get isConfigured {
+    final p = provider;
+    if (p == null) return false;
+    if (modelFor(p.id).trim().isEmpty || !hasKeyFor(p.id)) return false;
+    if (p.isCustom && _customBaseUrl.trim().isEmpty) return false;
+    return true;
+  }
+
+  Future<void> selectProvider(String id) async {
+    _providerId = id;
+    notifyListeners();
+    await _prefs.setString(_kProvider, id);
+  }
+
+  Future<void> setModel(String providerId, String model) async {
+    _models[providerId] = model;
+    notifyListeners();
+    await _prefs.setString(_kModel(providerId), model);
+  }
+
+  Future<void> setCustomBaseUrl(String url) async {
+    _customBaseUrl = url;
+    notifyListeners();
+    await _prefs.setString(_kCustomUrl, url);
+  }
+
+  Future<void> setVideoMode(String providerId, bool value) async {
+    _videoMode[providerId] = value;
+    notifyListeners();
+    await _prefs.setBool(_kVideo(providerId), value);
+  }
+
+  Future<void> setStubScenario(StubScenario s) async {
+    _scenario = s;
+    notifyListeners();
+    await _prefs.setString(_kScenario, s.id);
+  }
+
+  Future<String?> readKey(String providerId) => keys.read(providerId);
+
+  Future<void> saveKey(String providerId, String key) async {
+    final trimmed = key.trim();
+    if (trimmed.isEmpty) {
+      await keys.delete(providerId);
+    } else {
+      await keys.write(providerId, trimmed);
+    }
+    _hasKey[providerId] = trimmed.isNotEmpty;
+    notifyListeners();
+  }
+}
