@@ -60,6 +60,7 @@ flutter:
 
   assets:
     - assets/criteria.json
+    - assets/providers.json
     - assets/report.schema.json
     - assets/prompts/
 

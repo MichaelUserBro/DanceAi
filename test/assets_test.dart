@@ -1,5 +1,5 @@
 // Проверка данных для ИИ: criteria.json, report.schema.json, промпты и пример отчёта.
-// Полная проверка по JSON Schema здесь не делается — только правила из docs/spec.md, 7.6 п. 2.
+// Полная проверка по JSON Schema здесь не делается — только правила из docs/spec.md, 7.7 п. 2.
 
 import 'dart:convert';
 import 'dart:io';
@@ -62,6 +62,52 @@ void main() {
           expect(c['per_person'], isA<bool>(), reason: 'критерий ${c['id']}');
         }
       });
+
+      test('$id: music — размер вида N/M и темп [min, max] в тактах/мин', () {
+        final music = dance['music'] as Map<String, dynamic>;
+        expect(music['meter'], matches(RegExp(r'^\d+/\d+$')));
+        final tempo = (music['tempo_mpm'] as List).cast<int>();
+        expect(tempo, hasLength(2));
+        expect(tempo[0], greaterThan(0));
+        expect(tempo[0], lessThanOrEqualTo(tempo[1]));
+      });
+    }
+
+    test('удалённые фигуры tipli и chek отсутствуют', () {
+      final allFigureIds = [
+        for (final d in dances) ..._list(d['figures']).map((f) => f['id']),
+      ];
+      expect(allFigureIds, isNot(contains('tipli')));
+      expect(allFigureIds, isNot(contains('chek')));
+    });
+  });
+
+  group('providers.json', () {
+    final providersJson = _readJson('assets/providers.json');
+    final providers = _list(providersJson['providers']);
+    const apiTypes = {'anthropic', 'google', 'openai', 'openai_compatible'};
+
+    test('id провайдеров уникальны, custom не пересекается с ними', () {
+      final ids = providers.map((p) => p['id']).toList();
+      expect(ids, isNotEmpty);
+      expect(ids.toSet().length, ids.length, reason: 'дубли в $ids');
+      final custom = providersJson['custom'] as Map<String, dynamic>;
+      expect(ids, isNot(contains(custom['id'])));
+      expect(custom['api_type'], 'openai_compatible');
+      expect((custom['name'] as String).trim(), isNotEmpty);
+    });
+
+    for (final p in providers) {
+      test('${p['id']}: обязательные поля заполнены, api_type допустим', () {
+        expect(apiTypes, contains(p['api_type']));
+        for (final key in ['name', 'base_url', 'key_url', 'free_note_ru']) {
+          expect((p[key] as String).trim(), isNotEmpty, reason: key);
+        }
+        expect(Uri.parse(p['base_url'] as String).scheme, 'https');
+        expect(Uri.parse(p['key_url'] as String).scheme, 'https');
+        expect((p['key_steps_ru'] as List), isNotEmpty);
+        expect(p['recommended_models'], isA<List>());
+      });
     }
   });
 
@@ -76,7 +122,7 @@ void main() {
     });
   });
 
-  group('test/fixtures/report_example.json (spec 7.6 п. 2)', () {
+  group('test/fixtures/report_example.json (spec 7.7 п. 2)', () {
     final report = _readJson('test/fixtures/report_example.json');
     final dance = danceById(report['dance_id'] as String);
     final danceCriteria = allCriteriaOf(dance);
@@ -164,7 +210,7 @@ void main() {
       });
     }
 
-    test('analysis_user.md содержит все плейсхолдеры из spec 7.4', () {
+    test('analysis_user.md содержит все плейсхолдеры из spec 7.5', () {
       final text = File('assets/prompts/analysis_user.md').readAsStringSync();
       const placeholders = [
         '{{dance_id}}',

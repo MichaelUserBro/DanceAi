@@ -1,0 +1,72 @@
+{
+  "version": "1.0",
+  "updated": "2026-11-14",
+  "note": "Провайдеры ИИ равноправны: порядок в интерфейсе — алфавитный по name, без рекомендаций и приоритета. api_type определяет адаптер. recommended_models пока пусты — заполняются по итогам проверки на эталонном наборе. Модель пользователь вводит вручную.",
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic (Claude)",
+      "api_type": "anthropic",
+      "base_url": "https://api.anthropic.com",
+      "key_url": "https://platform.claude.com/settings/keys",
+      "key_steps_ru": [
+        "Откройте platform.claude.com и войдите или зарегистрируйтесь.",
+        "Пополните баланс в разделе Settings → Billing.",
+        "Откройте Settings → API keys и нажмите Create key.",
+        "Скопируйте ключ (он показывается один раз) и вставьте в поле «Ключ API»."
+      ],
+      "free_note_ru": "Платно, бесплатного тарифа API нет.",
+      "recommended_models": []
+    },
+    {
+      "id": "google",
+      "name": "Google (Gemini)",
+      "api_type": "google",
+      "base_url": "https://generativelanguage.googleapis.com",
+      "key_url": "https://aistudio.google.com/apikey",
+      "key_steps_ru": [
+        "Откройте Google AI Studio и войдите с аккаунтом Google.",
+        "Нажмите Create API key.",
+        "Скопируйте ключ и вставьте в поле «Ключ API»."
+      ],
+      "free_note_ru": "Есть бесплатный уровень с лимитами; на нём данные могут использоваться Google.",
+      "recommended_models": []
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "api_type": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "key_url": "https://platform.openai.com/api-keys",
+      "key_steps_ru": [
+        "Откройте platform.openai.com и войдите или зарегистрируйтесь.",
+        "Пополните баланс в разделе Billing.",
+        "Откройте API keys и нажмите Create new secret key.",
+        "Скопируйте ключ (он показывается один раз) и вставьте в поле «Ключ API»."
+      ],
+      "free_note_ru": "Платно.",
+      "recommended_models": []
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "api_type": "openai_compatible",
+      "base_url": "https://openrouter.ai/api/v1",
+      "key_url": "https://openrouter.ai/keys",
+      "key_steps_ru": [
+        "Откройте openrouter.ai и войдите или зарегистрируйтесь.",
+        "Откройте раздел Keys и нажмите Create Key.",
+        "Скопируйте ключ и вставьте в поле «Ключ API»."
+      ],
+      "free_note_ru": "Доступ к моделям разных компаний, есть бесплатные модели; бесплатные эндпоинты могут логировать запросы.",
+      "recommended_models": []
+    }
+  ],
+  "custom": {
+    "id": "custom",
+    "name": "Свой (OpenAI-совместимый API)",
+    "api_type": "openai_compatible",
+    "fields_ru": ["Адрес API (base URL)", "Модель", "Ключ API"],
+    "hint_ru": "Любой сервис с OpenAI-совместимым API (например, Qwen через Alibaba Cloud, локальный сервер). Адрес обычно оканчивается на /v1."
+  }
+}
