@@ -1,5 +1,5 @@
 {
-  "version": "1.1",
+  "version": "1.2",
   "updated": "2026-11-14",
   "note": "Обязательный минимум критериев и фигур по танцам MVP. per_person=true — вердикт отдельно для партнёра и партнёрши плюс общий для пары; false — только для пары. id фигур: из английского названия, если оно известно точно, иначе транслитерация русского.",
   "scale": { "min": 1, "max": 10 },
@@ -77,8 +77,7 @@
         { "id": "quarter_turn_to_right", "name_ru": "Правый четвертной поворот", "name_en": "Quarter Turn to Right", "note_ru": null },
         { "id": "progressive_chasse", "name_ru": "Поступательное шоссе", "name_en": "Progressive Chasse", "note_ru": null },
         { "id": "lock_step", "name_ru": "Локстеп шоссе (лок степ)", "name_en": "Lock Step", "note_ru": "Вероятно, одна фигура под двумя названиями." },
-        { "id": "tipli", "name_ru": "Типли", "name_en": null, "note_ru": null },
-        { "id": "tipple_chasse_to_right", "name_ru": "Типль шоссе", "name_en": "Tipple Chasse to Right", "note_ru": null },
+        { "id": "tipple_chasse_to_right", "name_ru": "Типль шоссе (типли)", "name_en": "Tipple Chasse to Right", "note_ru": "Типли и типль шоссе — одна и та же фигура." },
         { "id": "natural_spin_turn", "name_ru": "Спин", "name_en": "Natural Spin Turn", "note_ru": null }
       ]
     },
@@ -100,7 +99,6 @@
         { "id": "spot_turn", "name_ru": "Сольный поворот", "name_en": "Spot Turn", "note_ru": null },
         { "id": "underarm_turn", "name_ru": "Поворот под рукой", "name_en": "Underarm Turn", "note_ru": null },
         { "id": "postupatelnoe_shosse", "name_ru": "Поступательное шоссе", "name_en": null, "note_ru": null },
-        { "id": "chek", "name_ru": "Чек", "name_en": null, "note_ru": null },
         { "id": "new_york", "name_ru": "Нью-Йорк вперёд и назад", "name_en": "New York", "note_ru": null },
         { "id": "hand_to_hand", "name_ru": "Рука в руке", "name_en": "Hand to Hand", "note_ru": null },
         { "id": "three_cha_cha_chas", "name_ru": "Три ча-ча-ча", "name_en": "Three Cha Cha Chas", "note_ru": null },

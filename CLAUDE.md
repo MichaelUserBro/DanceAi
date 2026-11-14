@@ -5,6 +5,7 @@ DanceAI — приложение для бальных танцоров (сту�
 
 ## Стек и версии
 - Flutter 3.50.0 (stable), Dart 3.14.0.
+- Material — отдельный пакет `material_ui` (с Flutter 3.47 Material вынесен из SDK). Импорт: `package:material_ui/material_ui.dart`, НЕ `package:flutter/material.dart`. Зависимость `material_ui` в pubspec.yaml — штатная, не удалять.
 - Платформы: **Android** (Android SDK 37) и **Windows** (Visual Studio 2022, C++). Web, iOS, macOS, Linux не поддерживаются.
 - Пакет `dance_ai`, org `com.danceai`.
 - Репозиторий: https://github.com/MichaelUserBro/DanceAi, ветка `main`.
