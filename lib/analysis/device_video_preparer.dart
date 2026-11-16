@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -8,6 +8,7 @@ import 'cancel_token.dart';
 import 'media/ffmpeg_media_tool.dart';
 import 'media/media_tool.dart';
 import 'music/music_analyzer.dart';
+import 'music/music_isolate.dart';
 import 'video_preparer.dart';
 
 /// Делает уменьшенную копию кадра (PNG) для «Для разработчика».
@@ -185,15 +186,23 @@ class DeviceVideoPreparer implements VideoPreparer {
     cancel.throwIfCancelled();
     onProgress(const PrepareProgress(PrepareStage.analyzingMusic, 0.7));
 
-    final hint = MusicHint.fromDance(request.dance.music);
-    final path = pcm.path;
-    final rate = audioSampleRate;
     try {
-      final result = await Isolate.run(() {
-        final bytes = File(path).readAsBytesSync();
-        final samples = bytes.buffer.asFloat32List(0, bytes.length ~/ 4);
-        return const MusicAnalyzer().analyzeDetailed(samples, rate, hint);
+      // В изолят — только путь, частота и подсказка темпа (music_isolate.dart).
+      // Отмена — здесь: перестаём ждать результат.
+      final done = Completer<MusicResult>();
+      analyzeMusicFileInIsolate(
+        pcm.path,
+        audioSampleRate,
+        MusicHint.fromDance(request.dance.music),
+      ).then((r) {
+        if (!done.isCompleted) done.complete(r);
+      }, onError: (Object e, StackTrace s) {
+        if (!done.isCompleted) done.completeError(e, s);
       });
+      unawaited(cancel.whenCancelled.then((_) {
+        if (!done.isCompleted) done.completeError(const AnalysisCancelled());
+      }));
+      final result = await done.future;
       cancel.throwIfCancelled();
       diag
         ..audioRmsDb = result.rmsDb

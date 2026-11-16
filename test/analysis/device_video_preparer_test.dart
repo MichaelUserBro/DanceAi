@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -280,4 +281,50 @@ void main() {
       expect(workLeft(), isFalse);
     });
   });
+
+  test('изолят анализа музыки не захватывает объекты вызывающего (Timer, '
+      'State) — как на экране анализа', () async {
+    // Экран анализа держит Timer и получает прогресс через замыкание.
+    final screen = _ScreenLike();
+    addTearDown(screen.dispose);
+    final m = Metronome(bpm: 124, meter: 4, durationSec: 30);
+    final diag = PrepareDiagnostics();
+    final r = await DeviceVideoPreparer(
+      tool: FakeMediaTool(
+          audio: m.render(),
+          info: const MediaInfo(durationSec: 30, hasAudio: true, hasVideo: true)),
+      thumbnailer: _fakeThumb,
+    ).prepare(
+      PrepareRequest(
+        videoPath: 'v.mp4',
+        dance: data.criteria.dance('cha_cha'),
+        mode: SubmissionMode.frames,
+        frameOptions: const FrameOptions(),
+        workDir: work,
+        diagnostics: diag,
+      ),
+      onProgress: screen.onProgress,
+      cancel: CancelToken(),
+    );
+    expect(diag.notes, isEmpty);
+    expect(r.musicAnalysis, startsWith('Темп: 124 BPM'));
+    expect(diag.audioRmsDb, isNotNull);
+    expect(screen.updates, greaterThan(0));
+  });
+}
+
+class _ScreenLike {
+  final timer = Timer.periodic(const Duration(seconds: 1), (_) {});
+  final controller = StreamController<PrepareProgress>.broadcast();
+  var updates = 0;
+
+  void onProgress(PrepareProgress p) {
+    updates++;
+    controller.add(p);
+  }
+
+  void dispose() {
+    timer.cancel();
+    controller.close();
+  }
 }
