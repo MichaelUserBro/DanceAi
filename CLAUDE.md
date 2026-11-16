@@ -20,6 +20,7 @@ flutter analyze                   # без ошибок и предупрежд�
 flutter test
 flutter build apk --release
 flutter build windows --release
+powershell -ExecutionPolicy Bypass -File tool\make_release.ps1   # готовые версии в releases/ (старые удаляются)
 ```
 
 ## Файлы-источники (читать перед задачей)
