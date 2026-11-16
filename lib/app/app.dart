@@ -1,6 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
-import '../analysis/basic_video_preparer.dart';
+import '../analysis/device_video_preparer.dart';
 import '../analysis/temp_storage.dart';
 import '../data/app_data.dart';
 import '../settings/secure_key_store.dart';
@@ -9,6 +9,7 @@ import '../theme/stage_theme.dart';
 import '../ui/screens/home_screen.dart';
 import '../ui/widgets/stage_background.dart';
 import 'app_scope.dart';
+import 'licenses.dart';
 
 class DanceAiApp extends StatefulWidget {
   const DanceAiApp({super.key, this.servicesOverride});
@@ -25,6 +26,7 @@ class _DanceAiAppState extends State<DanceAiApp> {
       widget.servicesOverride ?? _bootstrap();
 
   static Future<AppServices> _bootstrap() async {
+    registerAppLicenses();
     final data = await AppData.load();
     final temp = TempStorage();
     final settings = SettingsStore(
@@ -40,7 +42,7 @@ class _DanceAiAppState extends State<DanceAiApp> {
     return AppServices(
       data: data,
       settings: settings,
-      preparer: const BasicVideoPreparer(),
+      preparer: DeviceVideoPreparer(),
       tempStorage: temp,
       dev: DevState(),
     );

@@ -29,6 +29,14 @@ android {
         versionName = flutter.versionName
     }
 
+    // Нативные библиотеки (FFmpeg) — сжатыми в APK: APK почти вдвое меньше,
+    // ценой распаковки при установке.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

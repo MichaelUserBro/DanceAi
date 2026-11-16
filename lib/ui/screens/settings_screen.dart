@@ -66,33 +66,25 @@ class SettingsScreen extends StatelessWidget {
               const SizedBox(height: 20),
               StaggeredAppear(
                 index: 4,
-                child: GlowCard(
+                child: _NavCard(
+                  icon: Icons.code_rounded,
+                  title: 'Для разработчика',
+                  subtitle: 'Сценарий заглушки, подготовка видео, собранный '
+                      'промпт, анализ музыки',
                   onTap: () => Navigator.of(context)
                       .push(stageRoute(const DeveloperScreen())),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.code_rounded,
-                          color: StageColors.textSecondary),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Для разработчика',
-                                style: StageText.body(15, weight: 700)),
-                            Text(
-                                'Сценарий заглушки, собранный промпт, '
-                                'анализ музыки',
-                                style: StageText.body(13,
-                                    color: StageColors.textMuted)),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.chevron_right_rounded,
-                          color: StageColors.textMuted),
-                    ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              StaggeredAppear(
+                index: 5,
+                child: _NavCard(
+                  icon: Icons.gavel_rounded,
+                  title: 'Лицензии',
+                  subtitle: 'FFmpeg (LGPL), шрифты и библиотеки',
+                  onTap: () => showLicensePage(
+                    context: context,
+                    applicationName: 'DanceAI',
                   ),
                 ),
               ),
@@ -100,6 +92,45 @@ class SettingsScreen extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _NavCard extends StatelessWidget {
+  const _NavCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlowCard(
+      onTap: onTap,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      child: Row(
+        children: [
+          Icon(icon, color: StageColors.textSecondary),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: StageText.body(15, weight: 700)),
+                Text(subtitle,
+                    style: StageText.body(13, color: StageColors.textMuted)),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right_rounded, color: StageColors.textMuted),
+        ],
+      ),
     );
   }
 }

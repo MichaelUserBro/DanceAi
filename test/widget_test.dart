@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:dance_ai/analysis/analysis_failure.dart';
-import 'package:dance_ai/analysis/basic_video_preparer.dart';
+import 'package:dance_ai/analysis/analysis_pipeline.dart';
+import 'package:dance_ai/analysis/device_video_preparer.dart';
 import 'package:dance_ai/analysis/temp_storage.dart';
+import 'package:dance_ai/analysis/video_preparer.dart';
 import 'package:dance_ai/app/app.dart';
 import 'package:dance_ai/app/app_scope.dart';
 import 'package:dance_ai/report/report.dart';
@@ -18,6 +20,7 @@ import 'package:dance_ai/ui/video_session.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'fake_media_tool.dart';
 import 'test_data.dart';
 
 AppServices makeServices() {
@@ -29,7 +32,7 @@ AppServices makeServices() {
       prefs: MemoryPrefsStore(),
       keys: MemoryKeyStore(),
     ),
-    preparer: const BasicVideoPreparer(),
+    preparer: DeviceVideoPreparer(tool: FakeMediaTool()),
     tempStorage: TempStorage(
         root: () async => Directory.systemTemp, isAndroid: false),
     dev: DevState(),
@@ -161,6 +164,7 @@ void main() {
       expect(find.text(n), findsOneWidget);
     }
     expect(find.text('Своя модель'), findsOneWidget);
+    expect(find.text('Лицензии'), findsOneWidget);
 
     await tester.tap(find.text(names.first));
     await tester.pump(const Duration(seconds: 1));
@@ -179,5 +183,29 @@ void main() {
     await tester.tap(find.text('Нет сети'));
     await tester.pump();
     expect(services.settings.stubScenario.id, 'network');
+  });
+
+  testWidgets('для разработчика: подготовка последнего видео', (tester) async {
+    final trace = AnalysisTrace();
+    trace.prepare
+      ..durationSec = 92
+      ..hasAudio = true
+      ..frameCount = 120
+      ..requestedFps = 2
+      ..actualFps = 1.3
+      ..thinned = true
+      ..bpm = 87.2
+      ..musicConfidence = 0.61
+      ..musicText = 'Темп: 87 BPM (29 тактов/мин), размер 3/4.'
+      ..stageTimes[PrepareStage.checkingVideo] = const Duration(milliseconds: 40)
+      ..stageTimes[PrepareStage.extractingFrames] = const Duration(seconds: 6);
+    services.dev.record(trace);
+    await pumpScreen(tester, services, const DeveloperScreen(),
+        size: const Size(1300, 1200));
+    expect(find.text('Подготовка видео'), findsOneWidget);
+    expect(find.textContaining('120, 1,3 кадр/с'), findsOneWidget);
+    expect(find.textContaining('87,2 BPM'), findsOneWidget);
+    expect(find.textContaining('всего 6 с'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

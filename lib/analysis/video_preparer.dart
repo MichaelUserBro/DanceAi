@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../data/criteria.dart';
 import 'cancel_token.dart';
@@ -59,6 +60,7 @@ class PrepareRequest {
     required this.mode,
     required this.frameOptions,
     required this.workDir,
+    this.diagnostics,
   });
 
   final String videoPath;
@@ -71,6 +73,45 @@ class PrepareRequest {
   /// Временная папка этого анализа. Всё производное — только сюда;
   /// конвейер удаляет её в любом исходе.
   final Directory workDir;
+
+  /// Куда записывать сведения для «Для разработчика» (по ходу подготовки,
+  /// поэтому видно и то, что успело выполниться до ошибки).
+  final PrepareDiagnostics? diagnostics;
+}
+
+/// Уменьшенный кадр для «Для разработчика». Только в памяти:
+/// живёт до следующего анализа или закрытия приложения.
+class FramePreview {
+  const FramePreview({required this.timeSec, required this.image});
+
+  final double timeSec;
+
+  /// PNG ~320 px по длинной стороне.
+  final Uint8List image;
+
+  String get label => 't=${timeSec.toStringAsFixed(2)}';
+}
+
+/// Сведения о подготовке последнего видео (spec 7.8, «Для разработчика»).
+class PrepareDiagnostics {
+  double? durationSec;
+  bool? hasAudio;
+  int? width;
+  int? height;
+  int? frameCount;
+  double? requestedFps;
+  double? actualFps;
+
+  /// Кадров при заданной частоте больше лимита — частота снижена.
+  bool thinned = false;
+  final List<FramePreview> previews = [];
+  String? musicText;
+  double? bpm;
+  double? musicConfidence;
+
+  /// Почему подготовка или анализ музыки не удались (технически, без ключей).
+  final List<String> notes = [];
+  final Map<PrepareStage, Duration> stageTimes = {};
 }
 
 /// Готовый материал для ИИ.

@@ -77,7 +77,9 @@ class _AnalysisScreenState extends State<AnalysisScreen>
       if (mounted) setState(() {});
     });
 
+    // Сведения прошлого анализа (в т. ч. превью кадров) больше не храним.
     final trace = AnalysisTrace();
+    services.dev.record(trace);
     try {
       final result = await services.createPipeline().run(
             dance: dance,

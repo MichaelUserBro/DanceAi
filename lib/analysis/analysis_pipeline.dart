@@ -42,6 +42,9 @@ class AnalysisTrace {
   String? musicAnalysis;
   double? durationSec;
   int? frameCount;
+
+  /// Подготовка видео: сведения, превью кадров, время стадий (spec 7.8).
+  final PrepareDiagnostics prepare = PrepareDiagnostics();
   final List<String> responses = [];
   final List<List<String>> problems = [];
 }
@@ -98,6 +101,7 @@ class AnalysisPipeline {
             mode: mode,
             frameOptions: caps.frameOptions,
             workDir: workDir,
+            diagnostics: trace?.prepare,
           ),
           onProgress: (p) => onProgress(AnalysisProgress(
             switch (p.stage) {
