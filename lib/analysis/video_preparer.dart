@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../data/criteria.dart';
+import 'music/music_analyzer.dart';
 import 'cancel_token.dart';
 
 /// Способ подачи материала ИИ (spec 7.3). Зависит от модели, а не от провайдера.
@@ -108,6 +109,16 @@ class PrepareDiagnostics {
   String? musicText;
   double? bpm;
   double? musicConfidence;
+  MusicConfidence? musicLevel;
+
+  /// Уровень звука, dBFS: по нему видно, не тишина ли и не перегруз ли.
+  double? audioRmsDb;
+  double? audioPeakDb;
+
+  /// Выраженность периодичности и согласие темпа по частям записи (0..1) —
+  /// из них складывается уверенность; по ним видно, почему анализ не удался.
+  double? musicPeriodicity;
+  double? musicAgreement;
 
   /// Почему подготовка или анализ музыки не удались (технически, без ключей).
   final List<String> notes = [];

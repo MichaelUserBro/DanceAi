@@ -4,6 +4,7 @@ import 'package:dance_ai/analysis/analysis_failure.dart';
 import 'package:dance_ai/analysis/analysis_pipeline.dart';
 import 'package:dance_ai/analysis/device_video_preparer.dart';
 import 'package:dance_ai/analysis/media/media_tool.dart';
+import 'package:dance_ai/analysis/music/music_analyzer.dart';
 import 'package:dance_ai/analysis/temp_storage.dart';
 import 'package:dance_ai/analysis/video_preparer.dart';
 import 'package:dance_ai/app/app.dart';
@@ -229,6 +230,11 @@ void main() {
       ..thinned = true
       ..bpm = 87.2
       ..musicConfidence = 0.61
+      ..musicLevel = MusicConfidence.medium
+      ..audioRmsDb = -15.2
+      ..audioPeakDb = -2.1
+      ..musicPeriodicity = 0.1
+      ..musicAgreement = 0.94
       ..musicText = 'Темп: 87 BPM (29 тактов/мин), размер 3/4.'
       ..stageTimes[PrepareStage.checkingVideo] = const Duration(milliseconds: 40)
       ..stageTimes[PrepareStage.extractingFrames] = const Duration(seconds: 6);
@@ -238,6 +244,9 @@ void main() {
     expect(find.text('Подготовка видео'), findsOneWidget);
     expect(find.textContaining('120, 1,3 кадр/с'), findsOneWidget);
     expect(find.textContaining('87,2 BPM'), findsOneWidget);
+    expect(find.textContaining('(средняя)'), findsOneWidget);
+    expect(find.textContaining('средний -15,2 дБ'), findsOneWidget);
+    expect(find.textContaining('совпал в 94 %'), findsOneWidget);
     expect(find.textContaining('всего 6 с'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

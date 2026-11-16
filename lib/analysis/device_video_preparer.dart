@@ -192,20 +192,24 @@ class DeviceVideoPreparer implements VideoPreparer {
       final result = await Isolate.run(() {
         final bytes = File(path).readAsBytesSync();
         final samples = bytes.buffer.asFloat32List(0, bytes.length ~/ 4);
-        final r = const MusicAnalyzer().analyze(samples, rate, hint);
-        return r == null
-            ? null
-            : (r.toPromptText(), r.bpm, r.confidence);
+        return const MusicAnalyzer().analyzeDetailed(samples, rate, hint);
       });
       cancel.throwIfCancelled();
-      if (result == null) {
-        diag.notes.add('музыка: ритм не найден');
+      diag
+        ..audioRmsDb = result.rmsDb
+        ..audioPeakDb = result.peakDb
+        ..musicPeriodicity = result.periodicity
+        ..musicAgreement = result.agreement;
+      final a = result.analysis;
+      if (a == null) {
+        diag.notes.add('музыка: ${result.failure ?? 'ритм не найден'}');
         return musicAnalysisUnavailable;
       }
       diag
-        ..bpm = result.$2
-        ..musicConfidence = result.$3;
-      return result.$1;
+        ..bpm = a.bpm
+        ..musicConfidence = a.confidence
+        ..musicLevel = a.level;
+      return a.toPromptText();
     } on AnalysisCancelled {
       rethrow;
     } on Object catch (e) {

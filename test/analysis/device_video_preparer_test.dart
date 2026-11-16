@@ -102,6 +102,11 @@ void main() {
       expect(diag.previews.last.timeSec, 39.5);
       expect(diag.previews.first.image.first, 32); // длинная сторона 320
       expect(diag.musicText, r.musicAnalysis);
+      expect(r.musicAnalysis, contains('Уверенность анализа:'));
+      expect(diag.musicLevel, isNotNull);
+      expect(diag.audioRmsDb, isNotNull);
+      expect(diag.musicPeriodicity, greaterThan(0.1));
+      expect(diag.musicAgreement, isNotNull);
       expect(diag.stageTimes.keys, PrepareStage.values);
       // Звук удаляется сразу после анализа музыки.
       expect(File('${work.path}/audio.f32').existsSync(), isFalse);
@@ -170,7 +175,8 @@ void main() {
       final diag = PrepareDiagnostics();
       final r = await prepare(FakeMediaTool(), diag: diag);
       expect(r.musicAnalysis, musicAnalysisUnavailable);
-      expect(diag.notes, isNotEmpty);
+      expect(diag.notes, contains('музыка: тишина'));
+      expect(diag.audioRmsDb, lessThan(-100));
     });
 
     test('видео целиком: кадры не извлекаются, музыка — да', () async {

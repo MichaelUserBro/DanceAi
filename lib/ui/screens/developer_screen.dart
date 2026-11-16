@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../analysis/music/music_analyzer.dart';
 import '../../analysis/prompt_builder.dart';
 import '../../analysis/stub_ai_provider.dart';
 import '../../analysis/video_preparer.dart';
@@ -149,6 +150,13 @@ class _PrepareInfo extends StatelessWidget {
   static String _num(double? v, int decimals) =>
       PromptBuilder.formatNumber(v, decimals: decimals).replaceAll('.', ',');
 
+  static String _levelRu(MusicConfidence? l) => switch (l) {
+        MusicConfidence.high => 'высокая',
+        MusicConfidence.medium => 'средняя',
+        MusicConfidence.low => 'низкая',
+        null => '—',
+      };
+
   static String _sec(Duration x) => '${_num(x.inMilliseconds / 1000, 1)} с';
 
   @override
@@ -173,11 +181,27 @@ class _PrepareInfo extends StatelessWidget {
           DeveloperScreen._kv('Исходный размер', '${d.width}×${d.height}'),
         DeveloperScreen._kv('Кадров', frames),
         DeveloperScreen._kv(
+          'Уровень звука',
+          d.audioRmsDb == null
+              ? '—'
+              : 'средний ${_num(d.audioRmsDb, 1)} дБ, '
+                  'пик ${_num(d.audioPeakDb, 1)} дБ',
+        ),
+        DeveloperScreen._kv(
           'Темп',
           d.bpm == null
               ? 'не определён'
-              : '${_num(d.bpm, 1)} BPM, уверенность ${_num(d.musicConfidence, 2)}',
+              : '${_num(d.bpm, 1)} BPM, уверенность '
+                  '${_num(d.musicConfidence, 2)} (${_levelRu(d.musicLevel)})',
         ),
+        if (d.musicPeriodicity != null)
+          DeveloperScreen._kv(
+            'Ритм',
+            'периодичность ${_num(d.musicPeriodicity, 3)} '
+                '(нужно от ${_num(MusicAnalyzer.minPeriodicity, 3)}), '
+                'темп совпал в ${d.musicAgreement == null ? '—' : '${(d.musicAgreement! * 100).round()} %'} '
+                'частей записи',
+          ),
         if (d.stageTimes.isNotEmpty)
           DeveloperScreen._kv(
             'Время',
