@@ -34,28 +34,9 @@ class TempStorage {
     }
   }
 
-  /// На Android выбранное видео — копия во временной папке приложения
-  /// ({cache}/{uuid}/{файл}); её удаляем. На Windows это файл пользователя —
-  /// его не трогаем никогда.
-  Future<void> releasePickedVideo(String path) async {
-    if (!_isAndroid) return;
-    final root = (await _root()).absolute.path;
-    final file = File(path).absolute;
-    final parent = file.parent;
-    if (!file.path.startsWith(root)) return;
-    try {
-      if (parent.path != root && _uuidLike.hasMatch(_name(parent.path))) {
-        await parent.delete(recursive: true);
-      } else if (await file.exists()) {
-        await file.delete();
-      }
-    } on FileSystemException {
-      // Не критично: подчистит cleanupStale при следующем запуске.
-    }
-  }
-
   /// При запуске: остатки прошлых анализов (если приложение было закрыто
-  /// посреди анализа) и, на Android, старые копии выбранных видео.
+  /// посреди анализа) и, на Android, копии видео, которые делали прежние
+  /// версии приложения (сейчас видео не копируется).
   Future<void> cleanupStale() async {
     final root = await _root();
     await deleteDir(Directory('${root.path}${Platform.pathSeparator}$_workFolder'));

@@ -60,7 +60,8 @@ class AnalysisFailure implements Exception {
         FailureKind.noAudio =>
           'В видео нет звука. Для оценки нужна музыка. Выберите видео со звуком.',
         FailureKind.unreadableVideo =>
-          'Файл не читается или это не видео. Выберите другой файл.',
+          'Не удалось открыть видео, выберите его заново. Если не '
+              'поможет — файл повреждён или это не видео.',
         FailureKind.invalidKey =>
           'Провайдер не принял ключ API. Проверьте ключ в настройках.',
         FailureKind.rateLimit =>

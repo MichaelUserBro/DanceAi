@@ -1,12 +1,13 @@
+import 'dart:async';
 import 'dart:io';
 
-import 'package:file_selector/file_selector.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../app/app_scope.dart';
 import '../../app/routes.dart';
 import '../../data/criteria.dart';
+import '../../platform/video_picker.dart';
 import '../../theme/stage_theme.dart';
 import '../format.dart';
 import '../video_session.dart';
@@ -15,20 +16,18 @@ import 'analysis_screen.dart';
 import 'settings_screen.dart';
 import 'shooting_guide_screen.dart';
 
-const _videoTypes = XTypeGroup(
-  label: 'Видео',
-  extensions: ['mp4', 'mov', 'm4v', '3gp', 'mkv', 'webm', 'avi'],
-  mimeTypes: ['video/*'],
-  uniformTypeIdentifiers: ['public.movie'],
-);
+const unreadableVideoMessage = 'Не удалось открыть видео, выберите его заново.';
 
 /// Экран «Видео» (spec 8б.2): выбор файла, превью, длительность, приватность.
 class VideoScreen extends StatefulWidget {
-  const VideoScreen({super.key, required this.dance});
+  const VideoScreen({super.key, required this.dance, this.initialVideo});
 
   static const routeName = 'video';
 
   final Dance dance;
+
+  /// Видео, выбранное до того, как Android выгрузил приложение.
+  final PickedVideo? initialVideo;
 
   @override
   State<VideoScreen> createState() => _VideoScreenState();
@@ -40,17 +39,24 @@ class _VideoScreenState extends State<VideoScreen> {
   bool _picking = false;
   bool _checking = false;
 
+  /// Превью не открылось (кодек, платформа) — анализ это не блокирует.
+  bool _previewFailed = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_session != null) return;
     final session = VideoSession(
       dance: widget.dance,
-      tempStorage: AppScope.of(context).tempStorage,
+      picker: AppScope.of(context).videoPicker,
     );
     session.addListener(_onSessionChanged);
     session.onChooseOther = _pick;
     _session = session;
+    final initial = widget.initialVideo;
+    if (initial != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _open(initial));
+    }
   }
 
   @override
@@ -76,43 +82,70 @@ class _VideoScreenState extends State<VideoScreen> {
     if (_picking) return;
     setState(() => _picking = true);
     try {
-      final file = await openFile(acceptedTypeGroups: const [_videoTypes]);
-      if (file == null || !mounted) return;
-      setState(() => _checking = true);
-      final probe = await AppScope.of(context).preparer.probe(file.path);
-      if (!mounted) return;
-      await _player?.dispose();
-      _player = null;
-      await _session!.setVideo(file.path, file.name, probe);
-      await _initPreview(file.path);
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Не удалось открыть файл. Выберите другое видео.')));
-      }
+      final picked = await AppScope.of(context)
+          .videoPicker
+          .pick(danceId: widget.dance.id);
+      if (picked == null || !mounted) return;
+      await _open(picked);
+    } on VideoPickException catch (e) {
+      _snack(e.message);
     } finally {
-      if (mounted) {
-        setState(() {
-          _picking = false;
-          _checking = false;
-        });
-      }
+      if (mounted) setState(() => _picking = false);
     }
   }
 
-  /// Превью — где платформа умеет (Android; Windows через video_player_win).
-  Future<void> _initPreview(String path) async {
-    final controller = VideoPlayerController.file(File(path));
+  /// Проверка выбранного видео (FFmpeg читает файл или URI напрямую) и превью.
+  Future<void> _open(PickedVideo picked) async {
+    final services = AppScope.of(context);
+    setState(() => _checking = true);
     try {
-      await controller.initialize();
+      final probe = await services.preparer.probe(picked.source);
+      if (!mounted) return;
+      if (!probe.readable) {
+        await services.videoPicker.release(picked);
+        _snack(unreadableVideoMessage);
+        return;
+      }
+      await _player?.dispose();
+      _player = null;
+      _previewFailed = false;
+      await _session!.setVideo(picked, probe);
+      // Превью готовится отдельно: «Оценить» доступна сразу после проверки.
+      unawaited(_initPreview(picked.source));
+    } catch (_) {
+      await services.videoPicker.release(picked);
+      _snack(unreadableVideoMessage);
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
+
+  void _snack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// Превью: Android — по content:// URI, Windows — файл (video_player_win).
+  Future<void> _initPreview(String source) async {
+    final controller = source.startsWith('content://')
+        ? VideoPlayerController.contentUri(Uri.parse(source))
+        : VideoPlayerController.file(File(source));
+    try {
+      // Плеер может не ответить вовсе (кодек, драйвер) — не ждём бесконечно.
+      await controller.initialize().timeout(const Duration(seconds: 8));
       await controller.setVolume(0.6);
-      if (!mounted || _session!.path != path) {
+      if (!mounted || _session!.path != source) {
         await controller.dispose();
         return;
       }
       setState(() => _player = controller);
     } catch (_) {
-      await controller.dispose();
+      if (mounted && _session!.path == source) {
+        setState(() => _previewFailed = true);
+      }
+      // Не ждём: у неинициализированного плеера закрытие может зависнуть.
+      unawaited(controller.dispose().catchError((Object _) {}));
     }
   }
 
@@ -137,6 +170,7 @@ class _VideoScreenState extends State<VideoScreen> {
       accent: accent,
       session: session,
       player: _player,
+      previewFailed: _previewFailed,
       busy: _picking || _checking,
       onPick: _pick,
     );
@@ -268,6 +302,7 @@ class _PickerCard extends StatelessWidget {
     required this.accent,
     required this.session,
     required this.player,
+    required this.previewFailed,
     required this.busy,
     required this.onPick,
   });
@@ -275,6 +310,7 @@ class _PickerCard extends StatelessWidget {
   final DanceAccent accent;
   final VideoSession session;
   final VideoPlayerController? player;
+  final bool previewFailed;
   final bool busy;
   final VoidCallback onPick;
 
@@ -308,7 +344,10 @@ class _PickerCard extends StatelessWidget {
           Text('Видео выбрано',
               style: StageText.body(15, weight: 600)),
           const SizedBox(height: 4),
-          Text('Превью на этой платформе недоступно',
+          Text(
+              previewFailed
+                  ? 'Превью недоступно — анализ это не мешает'
+                  : 'Превью готовится…',
               style: StageText.body(13, color: StageColors.textMuted)),
         ],
       );

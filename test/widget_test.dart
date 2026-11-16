@@ -3,10 +3,12 @@ import 'dart:io';
 import 'package:dance_ai/analysis/analysis_failure.dart';
 import 'package:dance_ai/analysis/analysis_pipeline.dart';
 import 'package:dance_ai/analysis/device_video_preparer.dart';
+import 'package:dance_ai/analysis/media/media_tool.dart';
 import 'package:dance_ai/analysis/temp_storage.dart';
 import 'package:dance_ai/analysis/video_preparer.dart';
 import 'package:dance_ai/app/app.dart';
 import 'package:dance_ai/app/app_scope.dart';
+import 'package:dance_ai/platform/video_picker.dart';
 import 'package:dance_ai/report/report.dart';
 import 'package:dance_ai/settings/secure_key_store.dart';
 import 'package:dance_ai/settings/settings_store.dart';
@@ -15,15 +17,18 @@ import 'package:dance_ai/ui/screens/developer_screen.dart';
 import 'package:dance_ai/ui/screens/error_screen.dart';
 import 'package:dance_ai/ui/screens/report_screen.dart';
 import 'package:dance_ai/ui/screens/settings_screen.dart';
+import 'package:dance_ai/ui/screens/video_screen.dart';
 import 'package:dance_ai/ui/screens/warning_screen.dart';
 import 'package:dance_ai/ui/video_session.dart';
+import 'package:dance_ai/ui/widgets/common.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'fake_media_tool.dart';
+import 'fake_video_picker.dart';
 import 'test_data.dart';
 
-AppServices makeServices() {
+AppServices makeServices({FakeMediaTool? tool, FakeVideoPicker? picker}) {
   final data = loadTestAppData();
   return AppServices(
     data: data,
@@ -32,10 +37,11 @@ AppServices makeServices() {
       prefs: MemoryPrefsStore(),
       keys: MemoryKeyStore(),
     ),
-    preparer: DeviceVideoPreparer(tool: FakeMediaTool()),
+    preparer: DeviceVideoPreparer(tool: tool ?? FakeMediaTool()),
     tempStorage: TempStorage(
         root: () async => Directory.systemTemp, isAndroid: false),
     dev: DevState(),
+    videoPicker: picker ?? FakeVideoPicker(),
   );
 }
 
@@ -58,7 +64,7 @@ void main() {
 
   VideoSession session(String danceId) => VideoSession(
       dance: services.data.criteria.dance(danceId),
-      tempStorage: services.tempStorage);
+      picker: services.videoPicker);
 
   testWidgets('главный экран: 4 танца в группах Стандарт и Латина',
       (tester) async {
@@ -234,5 +240,84 @@ void main() {
     expect(find.textContaining('87,2 BPM'), findsOneWidget);
     expect(find.textContaining('всего 6 с'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  group('экран «Видео»', () {
+    const big = PickedVideo(
+        source: 'content://media/document/video%3A1',
+        name: 'VID_big.mp4',
+        sizeBytes: 390000000);
+
+    Future<void> pickOnScreen(WidgetTester tester, AppServices s) async {
+      await pumpScreen(
+          tester, s, VideoScreen(dance: s.data.criteria.dance('samba')),
+          size: const Size(1300, 900));
+      await tester.tap(find.text('Выбрать видео'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 9));
+    }
+
+    testWidgets('выбор по URI: видео принято, превью недоступно — '
+        'анализ не блокируется', (tester) async {
+      final picker = FakeVideoPicker(next: big);
+      final s = makeServices(picker: picker);
+      await pickOnScreen(tester, s);
+      expect(picker.picks, ['samba']);
+      expect(find.text('VID_big.mp4'), findsOneWidget);
+      // В тестах платформенного плеера нет — как при неподдерживаемом кодеке.
+      expect(find.text('Превью недоступно — анализ это не мешает'),
+          findsOneWidget);
+      final start = tester.widget<PrimaryButton>(
+          find.widgetWithText(PrimaryButton, 'Оценить'));
+      expect(start.onPressed, isNotNull);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('URI недоступен → «Не удалось открыть видео, выберите его '
+        'заново», право освобождено', (tester) async {
+      final picker = FakeVideoPicker(next: big);
+      final s = makeServices(picker: picker, tool: FakeMediaTool(info: null));
+      await pickOnScreen(tester, s);
+      expect(find.text(unreadableVideoMessage), findsOneWidget);
+      expect(find.text('VID_big.mp4'), findsNothing);
+      expect(picker.released, [big.source]);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('ошибка выбора — сообщение, не вылет', (tester) async {
+      final picker = FakeVideoPicker(
+          error: const VideoPickException('Не удалось открыть выбор файла.'));
+      await pickOnScreen(tester, makeServices(picker: picker));
+      expect(find.text('Не удалось открыть выбор файла.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('после выгрузки приложения открывается экран «Видео» '
+        'с выбранным файлом', (tester) async {
+      final picker = FakeVideoPicker(
+          restored: const RestoredPick(danceId: 'quickstep', video: big));
+      final s = makeServices(picker: picker);
+      tester.view.physicalSize = const Size(1300, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(DanceAiApp(servicesOverride: Future.value(s)));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.byType(VideoScreen), findsOneWidget);
+      expect(find.text('Квикстеп'), findsWidgets);
+      expect(find.text('VID_big.mp4'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  test('VideoProbe для MediaInfo без видео — не читается', () async {
+    final p = await DeviceVideoPreparer(
+            tool: FakeMediaTool(
+                info: const MediaInfo(
+                    durationSec: 3, hasAudio: true, hasVideo: false)))
+        .probe('x');
+    expect(p.readable, isFalse);
   });
 }

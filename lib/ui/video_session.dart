@@ -1,47 +1,48 @@
 import 'package:flutter/foundation.dart';
 
-import '../analysis/temp_storage.dart';
 import '../analysis/video_preparer.dart';
 import '../data/criteria.dart';
+import '../platform/video_picker.dart';
 
 /// Выбранное видео на время одного «захода»: экран «Видео» → анализ →
-/// отчёт или ошибка. После успешного анализа и при уходе с экрана «Видео»
-/// копия видео (на Android) удаляется — видео не хранится.
+/// отчёт или ошибка. Видео не копируется: на Android это `content://` URI,
+/// на Windows — путь к файлу пользователя. После анализа и при уходе
+/// с экрана «Видео» право на URI освобождается — видео не хранится.
 class VideoSession extends ChangeNotifier {
-  VideoSession({required this.dance, required TempStorage tempStorage})
-      : _temp = tempStorage;
+  VideoSession({required this.dance, required this._picker});
 
   final Dance dance;
-  final TempStorage _temp;
+  final VideoPicker _picker;
 
-  String? _path;
-  String? _name;
+  PickedVideo? _video;
   VideoProbe? _probe;
 
   /// Просьба с экранов ошибки/предупреждения открыть выбор другого видео.
   VoidCallback? onChooseOther;
 
-  String? get path => _path;
-  String? get name => _name;
-  VideoProbe? get probe => _probe;
-  bool get hasVideo => _path != null;
+  PickedVideo? get video => _video;
 
-  Future<void> setVideo(String path, String name, VideoProbe probe) async {
-    await release();
-    _path = path;
-    _name = name;
+  /// Путь к файлу или `content://` URI — FFmpeg и превью читают напрямую.
+  String? get path => _video?.source;
+  String? get name => _video?.name;
+  VideoProbe? get probe => _probe;
+  bool get hasVideo => _video != null;
+
+  Future<void> setVideo(PickedVideo video, VideoProbe probe) async {
+    final old = _video;
+    _video = video;
     _probe = probe;
     notifyListeners();
+    if (old != null && old.source != video.source) await _picker.release(old);
   }
 
-  /// Удалить копию видео (если это копия во временной папке) и забыть её.
+  /// Забыть видео и освободить право на него.
   Future<void> release() async {
-    final old = _path;
+    final old = _video;
     if (old == null) return;
-    _path = null;
-    _name = null;
+    _video = null;
     _probe = null;
     notifyListeners();
-    await _temp.releasePickedVideo(old);
+    await _picker.release(old);
   }
 }

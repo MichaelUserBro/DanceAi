@@ -3,10 +3,13 @@ import 'package:material_ui/material_ui.dart';
 import '../analysis/device_video_preparer.dart';
 import '../analysis/temp_storage.dart';
 import '../data/app_data.dart';
+import '../platform/video_picker.dart';
 import '../settings/secure_key_store.dart';
 import '../settings/settings_store.dart';
 import '../theme/stage_theme.dart';
+import '../app/routes.dart';
 import '../ui/screens/home_screen.dart';
+import '../ui/screens/video_screen.dart';
 import '../ui/widgets/stage_background.dart';
 import 'app_scope.dart';
 import 'licenses.dart';
@@ -45,7 +48,27 @@ class _DanceAiAppState extends State<DanceAiApp> {
       preparer: DeviceVideoPreparer(),
       tempStorage: temp,
       dev: DevState(),
+      videoPicker: VideoPicker.platform(),
     );
+  }
+
+  final _navigator = GlobalKey<NavigatorState>();
+  bool _restoreChecked = false;
+
+  /// Android выгрузил приложение, пока был открыт выбор видео: после
+  /// перезапуска открываем экран «Видео» этого танца с выбранным файлом.
+  Future<void> _restorePick(AppServices services) async {
+    final restored = await services.videoPicker.takeRestored();
+    if (restored == null || !mounted) return;
+    final dance = services.data.criteria.dances
+        .where((d) => d.id == restored.danceId)
+        .firstOrNull;
+    final nav = _navigator.currentState;
+    if (dance == null || nav == null) {
+      await services.videoPicker.release(restored.video);
+      return;
+    }
+    nav.push(stageRoute(VideoScreen(dance: dance, initialVideo: restored.video)));
   }
 
   @override
@@ -60,9 +83,18 @@ class _DanceAiAppState extends State<DanceAiApp> {
           home = const StageBackground(child: SizedBox.expand());
         } else {
           home = const HomeScreen();
+          if (!_restoreChecked) {
+            _restoreChecked = true;
+            final services = snap.data!;
+            WidgetsBinding.instance
+                .addPostFrameCallback((_) => _restorePick(services));
+          }
         }
         final app = MaterialApp(
           title: 'DanceAI',
+          // Ключ — только у готового приложения: иначе навигатор экрана
+          // загрузки сохранился бы вместе со своим первым маршрутом.
+          navigatorKey: snap.hasData ? _navigator : null,
           debugShowCheckedModeBanner: false,
           theme: buildStageTheme(),
           home: home,

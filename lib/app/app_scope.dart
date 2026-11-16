@@ -5,6 +5,7 @@ import '../analysis/stub_ai_provider.dart';
 import '../analysis/temp_storage.dart';
 import '../analysis/video_preparer.dart';
 import '../data/app_data.dart';
+import '../platform/video_picker.dart';
 import '../settings/settings_store.dart';
 
 /// Что показывается в «Для разработчика»: только в памяти, без ключа.
@@ -26,6 +27,7 @@ class AppServices {
     required this.preparer,
     required this.tempStorage,
     required this.dev,
+    required this.videoPicker,
   });
 
   final AppData data;
@@ -33,6 +35,7 @@ class AppServices {
   final VideoPreparer preparer;
   final TempStorage tempStorage;
   final DevState dev;
+  final VideoPicker videoPicker;
 
   /// Пока настоящих адаптеров нет, анализ всегда идёт через заглушку (spec 7.8).
   AnalysisPipeline createPipeline() => AnalysisPipeline(

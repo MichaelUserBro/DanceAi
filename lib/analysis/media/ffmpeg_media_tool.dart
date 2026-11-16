@@ -19,8 +19,14 @@ class FfmpegMediaTool implements MediaTool {
   /// (дескриптор закрывается после использования).
   Future<String> _resolve(String input) async {
     if (!input.startsWith('content://')) return input;
-    final saf = await FFmpegKitConfig.getSafParameterForRead(input);
-    if (saf == null) throw const MediaToolException('SAF недоступен');
+    // Файл удалён или право на URI потеряно — понятная ошибка, не вылет.
+    String? saf;
+    try {
+      saf = await FFmpegKitConfig.getSafParameterForRead(input);
+    } catch (_) {
+      saf = null;
+    }
+    if (saf == null) throw const MediaToolException('URI недоступен');
     return saf;
   }
 
