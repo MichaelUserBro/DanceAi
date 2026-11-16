@@ -122,6 +122,33 @@ void main() {
     });
   }
 
+  testWidgets('отчёт: у партнёрши нет части оценок — линия и пометка есть',
+      (tester) async {
+    final json = loadExampleReportJson();
+    final scores = json['scores'] as Map<String, dynamic>;
+    final ids = scores.keys.toList();
+    (scores[ids[1]] as Map)['follower'] = null;
+    (scores[ids[3]] as Map)['leader'] = null;
+    final report = DanceReport.fromJson(json);
+    await pumpScreen(
+      tester,
+      services,
+      ReportScreen(
+        report: report,
+        dance: services.data.criteria.dance('slow_waltz'),
+        session: session('slow_waltz'),
+      ),
+      size: const Size(1300, 1000),
+    );
+    final names = {
+      for (final c in services.data.criteria.components) c.id: c.nameRu,
+    };
+    expect(find.text('Партнёрша'), findsWidgets);
+    expect(find.text(' · нет оценки: ${names[ids[1]]}'), findsOneWidget);
+    expect(find.text(' · нет оценки: ${names[ids[3]]}'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('предупреждение при low_confidence: причины и два действия',
       (tester) async {
     final json = loadExampleReportJson();

@@ -11,6 +11,7 @@ enum StubScenario {
   normal('normal', 'Нормальный ответ'),
   lowConfidence('low_confidence', 'low_confidence — оценка неточная'),
   unusable('unusable', 'unusable — оценить нельзя'),
+  partialScores('partial_scores', 'Нет части личных оценок'),
   invalidJson('invalid_json', 'Невалидный JSON'),
   invalidKey('invalid_key', 'Неверный ключ'),
   rateLimit('rate_limit', 'Лимит запросов'),
@@ -86,6 +87,7 @@ class StubAiProvider implements AiProvider {
         _ => 'ok',
       },
       mode: request.mode,
+      partialScores: scenario == StubScenario.partialScores,
     );
     // Как настоящие модели, иногда оборачивает JSON в ```json.
     final text = const JsonEncoder.withIndent('  ').convert(report);
@@ -97,6 +99,7 @@ class StubAiProvider implements AiProvider {
     Dance dance, {
     required String status,
     SubmissionMode mode = SubmissionMode.frames,
+    bool partialScores = false,
   }) {
     final r = _random;
     final unusable = status == 'unusable';
@@ -176,13 +179,25 @@ class StubAiProvider implements AiProvider {
       });
     }
 
+    // Личные оценки: обычно у обоих все; редко (1 из 10) — один пропуск.
+    // Сценарий «Нет части личных оценок»: у партнёрши нет 1–2 компонентов,
+    // у партнёра — другого.
+    final compIds = [for (final c in catalog.components) c.id]..shuffle(r);
+    final noLeader = <String>{};
+    final noFollower = <String>{};
+    if (partialScores) {
+      noFollower.addAll(compIds.take(1 + r.nextInt(2)));
+      noLeader.add(compIds.last);
+    } else if (r.nextInt(10) == 0) {
+      (r.nextBool() ? noLeader : noFollower).add(compIds.first);
+    }
     final scores = <String, dynamic>{};
     for (final comp in catalog.components) {
       final couple = score();
       scores[comp.id] = {
         'couple': couple,
-        'leader': around(couple),
-        'follower': r.nextInt(6) == 0 ? null : around(couple),
+        'leader': noLeader.contains(comp.id) ? null : around(couple),
+        'follower': noFollower.contains(comp.id) ? null : around(couple),
         'comment': 'Демо: оценка заглушки за «${comp.nameRu}».',
       };
     }

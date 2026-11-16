@@ -103,4 +103,51 @@ void main() {
       await expectLater(future, throwsA(isA<AnalysisCancelled>()));
     });
   });
+
+  group('личные оценки', () {
+    List<Map<String, dynamic>> scoresOf(Map<String, dynamic> json) => [
+          for (final v in (json['scores'] as Map).values)
+            v as Map<String, dynamic>,
+        ];
+
+    test('обычно у обоих все 4 оценки, пропуски редки', () {
+      final dance = data.criteria.dance('slow_waltz');
+      var complete = 0;
+      for (var seed = 0; seed < 200; seed++) {
+        final s = scoresOf(stub(StubScenario.normal, seed: seed)
+            .generateReport(dance, status: 'ok'));
+        final nulls = s
+            .where((x) => x['leader'] == null || x['follower'] == null)
+            .length;
+        expect(nulls, lessThanOrEqualTo(1));
+        if (nulls == 0) complete++;
+      }
+      expect(complete, greaterThanOrEqualTo(160));
+    });
+
+    test('«Нет части личных оценок»: у партнёрши 1–2 пропуска, у партнёра — '
+        'другой компонент; отчёт валиден', () async {
+      for (var seed = 0; seed < 30; seed++) {
+        final dance = data.criteria.dances[seed % data.criteria.dances.length];
+        final raw = await stub(StubScenario.partialScores, seed: seed)
+            .analyze(request(dance.id), onPhase: (_) {}, cancel: CancelToken());
+        final outcome = parseReport(raw, dance: dance, validator: validator);
+        expect(outcome, isA<ParsedReport>(), reason: 'seed $seed');
+        final report = (outcome as ParsedReport).report;
+        final noFollower = [
+          for (final e in report.scores.entries)
+            if (e.value.follower == null) e.key,
+        ];
+        final noLeader = [
+          for (final e in report.scores.entries)
+            if (e.value.leader == null) e.key,
+        ];
+        expect(noFollower.length, inInclusiveRange(1, 2));
+        expect(noLeader, hasLength(1));
+        expect(noFollower.toSet().intersection(noLeader.toSet()), isEmpty);
+        expect(report.hasPersonScores(Who.follower), isTrue);
+        expect(report.hasPersonScores(Who.leader), isTrue);
+      }
+    });
+  });
 }

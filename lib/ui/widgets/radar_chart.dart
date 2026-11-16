@@ -4,27 +4,60 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../theme/stage_theme.dart';
 
+/// Маркер точек линии — чтобы линии различались, даже когда совпадают.
+enum RadarMarker { dot, diamond, ring }
+
 class RadarSeries {
   const RadarSeries({
     required this.label,
     required this.color,
     required this.values,
     this.filled = false,
+    this.marker = RadarMarker.dot,
+    this.lineOffset = 0,
   });
 
   final String label;
   final Color color;
 
-  /// По одному значению на ось; null — нет оценки (точка не рисуется,
-  /// линия идёт через центр не будет — серия пропускается целиком).
+  /// По одному значению на ось; null — нет оценки. Отсутствующая оценка
+  /// никогда не рисуется как 0 или центр: на этой оси у линии разрыв.
   final List<int?> values;
   final bool filled;
+  final RadarMarker marker;
 
-  bool get isComplete => values.every((v) => v != null);
+  /// Сдвиг линии вбок, px: линии партнёра и партнёрши идут параллельно
+  /// линии пары и видны, даже когда оценки совпадают.
+  final double lineOffset;
+
+  /// Серия показывается, если есть хотя бы одна оценка.
+  bool get hasAny => values.any((v) => v != null);
+
+  /// Индексы осей без оценки.
+  List<int> get missing => [
+        for (var i = 0; i < values.length; i++)
+          if (values[i] == null) i,
+      ];
+}
+
+/// Отрезок линии серии между соседними осями [from] и [to].
+typedef RadarSegment = ({int from, int to});
+
+/// Отрезки линии серии: только между соседними осями, где обе оценки есть.
+/// На оси без оценки — разрыв: отсутствующая оценка не рисуется ни как 0,
+/// ни как центр, и линия не проходит через центр к дальней оси.
+List<RadarSegment> radarSegments(List<int?> values) {
+  final n = values.length;
+  if (n < 2) return const [];
+  return [
+    for (var i = 0; i < n; i++)
+      if (values[i] != null && values[(i + 1) % n] != null && (n > 2 || i == 0))
+        (from: i, to: (i + 1) % n),
+  ];
 }
 
 /// Радар-диаграмма по компонентам (spec 6): пара — заливкой,
-/// партнёр и партнёрша — линиями. Вырастает из центра при появлении.
+/// партнёр и партнёрша — линиями поверх. Вырастает из центра при появлении.
 class RadarChart extends StatefulWidget {
   const RadarChart({
     super.key,
@@ -66,7 +99,7 @@ class _RadarChartState extends State<RadarChart>
 
   @override
   Widget build(BuildContext context) {
-    final visible = widget.series.where((s) => s.isComplete).toList();
+    final visible = widget.series.where((s) => s.hasAny).toList();
     return Column(
       children: [
         AspectRatio(
@@ -74,12 +107,13 @@ class _RadarChartState extends State<RadarChart>
           child: RepaintBoundary(
             child: CustomPaint(
               painter: _RadarPainter(
-                progress: CurvedAnimation(
-                    parent: _grow, curve: Curves.easeOutBack),
+                progress:
+                    CurvedAnimation(parent: _grow, curve: Curves.easeOutBack),
                 axes: widget.axes,
                 series: visible,
                 max: widget.max,
-                labelStyle: StageText.label(12, color: StageColors.textSecondary),
+                labelStyle:
+                    StageText.label(12, color: StageColors.textSecondary),
               ),
             ),
           ),
@@ -91,27 +125,99 @@ class _RadarChartState extends State<RadarChart>
           alignment: WrapAlignment.center,
           children: [
             for (final s in visible)
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 14,
-                    height: 3,
-                    decoration: BoxDecoration(
-                      color: s.color,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(s.label,
-                      style: StageText.label(12,
-                          color: StageColors.textSecondary)),
-                ],
+              RadarLegendItem(
+                series: s,
+                missing: [for (final i in s.missing) widget.axes[i]],
               ),
           ],
         ),
       ],
     );
+  }
+}
+
+class RadarLegendItem extends StatelessWidget {
+  const RadarLegendItem(
+      {super.key, required this.series, required this.missing});
+
+  final RadarSeries series;
+
+  /// Названия компонентов без оценки.
+  final List<String> missing;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 22,
+          height: 12,
+          child: CustomPaint(painter: _LegendSwatch(series)),
+        ),
+        const SizedBox(width: 6),
+        Text(series.label,
+            style: StageText.label(12, color: StageColors.textSecondary)),
+        if (missing.isNotEmpty)
+          Flexible(
+            child: Text(
+              ' · нет оценки: ${missing.join(', ')}',
+              style: StageText.label(12, color: StageColors.textMuted),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _LegendSwatch extends CustomPainter {
+  _LegendSwatch(this.series);
+  final RadarSeries series;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final y = size.height / 2;
+    canvas.drawLine(
+      Offset(0, y),
+      Offset(size.width, y),
+      Paint()
+        ..color = series.color
+        ..strokeWidth = series.filled ? 3 : 2
+        ..strokeCap = StrokeCap.round,
+    );
+    _drawMarker(canvas, Offset(size.width / 2, y), series);
+  }
+
+  @override
+  bool shouldRepaint(_LegendSwatch old) => old.series != series;
+}
+
+void _drawMarker(Canvas canvas, Offset c, RadarSeries s) {
+  final fill = Paint()..color = s.color;
+  final halo = Paint()..color = StageColors.backgroundDeep;
+  switch (s.marker) {
+    case RadarMarker.dot:
+      canvas.drawCircle(
+          c, 6, Paint()..color = s.color.withValues(alpha: 0.25));
+      canvas.drawCircle(c, 3.2, fill);
+    case RadarMarker.diamond:
+      Path diamond(double r) => Path()
+        ..moveTo(c.dx, c.dy - r)
+        ..lineTo(c.dx + r, c.dy)
+        ..lineTo(c.dx, c.dy + r)
+        ..lineTo(c.dx - r, c.dy)
+        ..close();
+      canvas.drawPath(diamond(4.6), halo);
+      canvas.drawPath(diamond(3.4), fill);
+    case RadarMarker.ring:
+      // Без заливки: ромб партнёра в той же точке остаётся виден.
+      canvas.drawCircle(
+          c,
+          6,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2
+            ..color = s.color);
   }
 }
 
@@ -179,16 +285,26 @@ class _RadarPainter extends CustomPainter {
       );
     }
 
-    // Серии: сначала заливки, потом линии и точки.
-    for (final s in series) {
-      final path = Path();
-      for (var i = 0; i < n; i++) {
-        final v = (s.values[i]! / max).clamp(0.0, 1.0) * p;
-        final pt = point(i, radius * v);
-        i == 0 ? path.moveTo(pt.dx, pt.dy) : path.lineTo(pt.dx, pt.dy);
+    // Сначала пара (заливка), поверх — линии людей: они не теряются под
+    // заливкой и видны, даже когда совпадают с линией пары.
+    final ordered = [
+      ...series.where((s) => s.filled),
+      ...series.where((s) => !s.filled),
+    ];
+    for (final s in ordered) {
+      Offset? at(int i) {
+        final v = s.values[i];
+        if (v == null) return null;
+        return point(i, radius * (v / max).clamp(0.0, 1.0) * p);
       }
-      path.close();
-      if (s.filled) {
+
+      if (s.filled && s.missing.isEmpty) {
+        final path = Path();
+        for (var i = 0; i < n; i++) {
+          final pt = at(i)!;
+          i == 0 ? path.moveTo(pt.dx, pt.dy) : path.lineTo(pt.dx, pt.dy);
+        }
+        path.close();
         canvas.drawPath(
           path,
           Paint()
@@ -198,22 +314,31 @@ class _RadarPainter extends CustomPainter {
             ]).createShader(Rect.fromCircle(center: center, radius: radius)),
         );
       }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = s.filled ? 2.4 : 1.6
-          ..strokeJoin = StrokeJoin.round
-          ..color = s.color.withValues(alpha: s.filled ? 1 : 0.85),
-      );
-      if (s.filled) {
-        for (var i = 0; i < n; i++) {
-          final v = (s.values[i]! / max).clamp(0.0, 1.0) * p;
-          final pt = point(i, radius * v);
-          canvas.drawCircle(pt, 6,
-              Paint()..color = s.color.withValues(alpha: 0.25));
-          canvas.drawCircle(pt, 3.2, Paint()..color = s.color);
+
+      final line = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = s.filled ? 2.6 : 1.8
+        ..strokeCap = StrokeCap.round
+        ..color = s.color;
+      for (final seg in radarSegments(s.values)) {
+        final a = at(seg.from)!;
+        final b = at(seg.to)!;
+        var shift = Offset.zero;
+        final len = (b - a).distance;
+        if (s.lineOffset != 0 && len > 0) {
+          // Нормаль к отрезку, наружу от центра.
+          var normal = Offset(-(b - a).dy, (b - a).dx) / len;
+          final mid = (a + b) / 2;
+          if ((mid - center).dx * normal.dx + (mid - center).dy * normal.dy < 0) {
+            normal = -normal;
+          }
+          shift = normal * s.lineOffset;
         }
+        canvas.drawLine(a + shift, b + shift, line);
+      }
+      for (var i = 0; i < n; i++) {
+        final pt = at(i);
+        if (pt != null) _drawMarker(canvas, pt, s);
       }
     }
   }

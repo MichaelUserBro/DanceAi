@@ -56,12 +56,22 @@ class _ReportScreenState extends State<ReportScreen> {
             child: RadarChart(
               axes: [for (final c in catalog.components) c.nameRu],
               series: [
-                for (final who in [Who.follower, Who.leader, Who.couple])
+                for (final who in [Who.couple, Who.leader, Who.follower])
                   if (who == Who.couple || report.hasPersonScores(who))
                     RadarSeries(
                       label: who.titleRu,
                       color: StageColors.who(who, accent),
                       filled: who == Who.couple,
+                      marker: switch (who) {
+                        Who.couple => RadarMarker.dot,
+                        Who.leader => RadarMarker.diamond,
+                        Who.follower => RadarMarker.ring,
+                      },
+                      lineOffset: switch (who) {
+                        Who.couple => 0,
+                        Who.leader => 2.5,
+                        Who.follower => -2.5,
+                      },
                       values: [
                         for (final id in componentIds) report.scores[id]!.of(who)
                       ],
