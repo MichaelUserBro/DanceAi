@@ -125,9 +125,18 @@ void main() {
         final sw = Stopwatch()..start();
         String sec(Duration? d) =>
             d == null ? '—' : (d.inMilliseconds / 1000).toStringAsFixed(1);
+        // runAsync проглатывает исключения — исход ловим внутри.
+        final outcome = await tester.runAsync<Object>(() async {
+          try {
+            return await ai.analyze(request,
+                onProgress: (_) {}, cancel: CancelToken());
+          } on AiException catch (e) {
+            return e;
+          }
+        });
         try {
-          final r = await tester.runAsync(() => ai.analyze(request,
-              onProgress: (_) {}, cancel: CancelToken())) as AiResponse;
+          if (outcome is AiException) throw outcome;
+          final r = outcome! as AiResponse;
           final j = jsonDecode(r.text);
           final ok = j is Map && j['ok'] == true;
           final u = r.usage;
