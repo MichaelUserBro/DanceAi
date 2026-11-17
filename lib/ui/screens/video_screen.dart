@@ -224,12 +224,15 @@ class _VideoScreenState extends State<VideoScreen> {
           ],
           const SizedBox(height: 12),
         ],
-        if (!settings.isConfigured) ...[
+        if (settings.demoMode || !settings.isConfigured) ...[
           _Notice(
             icon: Icons.auto_awesome_rounded,
             color: StageColors.spotlight,
-            text: 'ИИ не настроен. Сейчас оценка работает в демо-режиме — '
-                'чтобы подключить ИИ, откройте настройки.',
+            text: settings.demoMode
+                ? 'Включён демо-режим: оценка без ИИ, отчёт — пример. '
+                    'Выключается в настройках, «Для разработчика».'
+                : 'ИИ не настроен. Укажите провайдера, модель и ключ API '
+                    'в настройках.',
             action: TextButton(
               onPressed: () =>
                   Navigator.of(context).push(stageRoute(const SettingsScreen())),
