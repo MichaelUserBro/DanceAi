@@ -43,11 +43,11 @@ powershell -ExecutionPolicy Bypass -File tool\make_release.ps1   # готовы�
 9. Приложение должно «летать»: тяжёлая работа (видео, кадры, анализ музыки, сеть) — вне UI-потока; визуал и анимации — сильная сторона продукта, без подвисаний. Тема одна — тёмная «сцена» (`docs/spec.md`, 8а).
 
 ## Особенности API ИИ (легко забыть)
-- Ключ — только в заголовке (`x-goog-api-key`, `Authorization: Bearer`, `x-api-key`), никогда в URL, логах, `AiException.detail`, трассировке и сохранённом JSON. `HttpAiProvider` дополнительно вырезает ключ из текстов ошибок; тесты это проверяют.
+- Ключ — только в заголовке (`x-goog-api-key`, `Authorization: Bearer`), никогда в URL, логах, `AiException.detail`, трассировке и сохранённом JSON. `HttpAiProvider` дополнительно вырезает ключ из текстов ошибок; тесты это проверяют.
 - Строгую JSON-схему на стороне провайдера не включаем — только «ответ — JSON»; 400 на JSON-режим или лимит токенов → один повтор без параметра.
 - Google: inline-запрос — до 20 МБ всего (base64 ×4/3), видео больше 14 МБ — File API (resumable upload → ждать `ACTIVE` → `fileData.fileUri`), файл удалять `DELETE` в любом исходе. «Размышление» gemini-3.8-flash не отключается (`minimal` → ошибка) и входит в `maxOutputTokens`. temperature/topP/topK для Gemini 3.6+ не передавать. `models.get` не сообщает модальности.
 - OpenRouter: ошибка может прийти в ответе 200 (`error` в теле); неподдерживаемые параметры молча игнорируются; `:free` — 20 запросов/мин и 50/день (тесты не гонять впустую). Видео — `video_url` с data URL; предел размера не документирован (у нас 20 МБ).
-- Anthropic: нет JSON-режима без схемы, prefill ответа запрещён (400) — последнее сообщение всегда пользователя; `max_tokens` обязателен; до 100 изображений у моделей с окном 200k.
+- Anthropic (`anthropic-version: 2026-10-21`): ключ — `Authorization: Bearer`; temperature/top_p/top_k запрещены (400); нет JSON-режима без схемы, prefill ответа запрещён (400) — последнее сообщение всегда пользователя; `max_tokens` обязателен, у нас 16000 (без потока большой лимит рискует таймаутом); до 100 изображений у моделей с окном 200k.
 - OpenAI: Responses API (`/responses`), `instructions`, `input_image`, `store: false`.
 - FFmpeg без GPL: нет libx264. Облегчённая копия — `h264_mediacodec` (Android) / `h264_mf` (Windows), запасной `mpeg4`.
 - Живые тесты (`integration_test/live_ai_test.dart`) — только по команде автора; ключи из `DANCEAI_GOOGLE_KEY`, `DANCEAI_OPENROUTER_KEY`.

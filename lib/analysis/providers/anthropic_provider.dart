@@ -13,7 +13,11 @@ import 'provider_common.dart';
 ///   больше 20 изображений — каждое не больше 3000 px (у нас 768);
 /// - JSON-режима без схемы нет, предзаполнение ответа `{` на новых моделях
 ///   запрещено (400) — только промпт и вырезание JSON из ответа;
-/// - ключ — `x-api-key`, версия — `anthropic-version`.
+/// - версия `anthropic-version: 2026-10-21` (руководство по миграции):
+///   ключ — `Authorization: Bearer` (как в SDK; `x-api-key` API тоже
+///   принимает); temperature/top_p/top_k запрещены (400) — не передаём;
+/// - лимит ответа — 16000: без потоковой отдачи большой лимит рискует
+///   таймаутом (документация советует поток при больших max_tokens).
 class AnthropicProvider extends HttpAiProvider {
   AnthropicProvider({
     required super.model,
@@ -24,6 +28,9 @@ class AnthropicProvider extends HttpAiProvider {
   });
 
   static const apiVersion = '2026-10-21';
+
+  /// Меньше общего [maxOutputTokens]: запрос без потока.
+  static const maxTokens = 16000;
 
   static const capabilitiesStatic = AiCapabilities(
     supportsVideo: false,
@@ -37,7 +44,7 @@ class AnthropicProvider extends HttpAiProvider {
   bool get canDropTokenLimit => false;
 
   Map<String, String> get _auth =>
-      {'x-api-key': key, 'anthropic-version': apiVersion};
+      {'authorization': 'Bearer $key', 'anthropic-version': apiVersion};
 
   @override
   Future<HttpCall> buildCall(AiRequest request, Object? media, CallOptions o) async {
@@ -60,7 +67,7 @@ class AnthropicProvider extends HttpAiProvider {
       {
         'model': model,
         // Лимит обязателен в этом API — без него не повторяем.
-        'max_tokens': maxOutputTokens,
+        'max_tokens': maxTokens,
         'system': request.systemPrompt,
         'messages': [
           {'role': 'user', 'content': content},

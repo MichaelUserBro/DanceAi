@@ -456,11 +456,15 @@ void main() {
       await analyze(anthropic(http), req(frames, retry: true));
       final c = http.calls.single;
       expect(c.uri.toString(), 'https://a.test/v1/messages');
-      expect(c.headers['x-api-key'], _key);
-      expect(c.headers['anthropic-version'], AnthropicProvider.apiVersion);
+      expect(c.headers['authorization'], 'Bearer $_key');
+      expect(c.headers.containsKey('x-api-key'), isFalse);
+      expect(c.headers['anthropic-version'], '2026-10-21');
       final b = FakeHttp.body(c);
       expect(b['system'], 'SYSTEM');
-      expect(b['max_tokens'], maxOutputTokens);
+      expect(b['max_tokens'], 16000);
+      for (final k in ['temperature', 'top_p', 'top_k']) {
+        expect(b.containsKey(k), isFalse);
+      }
       final m = b['messages'] as List;
       final content = m[0]['content'] as List;
       expect(content[0], {'type': 'text', 'text': 't=0.00'});

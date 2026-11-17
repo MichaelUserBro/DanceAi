@@ -23,7 +23,7 @@
       "id": "google",
       "name": "Google (Gemini)",
       "api_type": "google",
-      "verified_live": true,
+      "verified_live": false,
       "base_url": "https://generativelanguage.googleapis.com",
       "key_url": "https://aistudio.google.com/apikey",
       "key_steps_ru": [
@@ -54,7 +54,7 @@
       "id": "openrouter",
       "name": "OpenRouter",
       "api_type": "openai_compatible",
-      "verified_live": true,
+      "verified_live": false,
       "base_url": "https://openrouter.ai/api/v1",
       "key_url": "https://openrouter.ai/keys",
       "key_steps_ru": [

@@ -327,8 +327,9 @@ void main() {
     test('пометка «не проверено вживую» — из providers.json', () {
       expect(data.providers.byId('anthropic')!.verifiedLive, isFalse);
       expect(data.providers.byId('openai')!.verifiedLive, isFalse);
-      expect(data.providers.byId('google')!.verifiedLive, isTrue);
-      expect(data.providers.byId('openrouter')!.verifiedLive, isTrue);
+      // true — только после живой проверки.
+      expect(data.providers.byId('google')!.verifiedLive, isFalse);
+      expect(data.providers.byId('openrouter')!.verifiedLive, isFalse);
       expect(AdapterRegistry.realAdaptersAvailable, isTrue);
     });
   });
