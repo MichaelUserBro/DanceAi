@@ -54,15 +54,21 @@ void main() {
   });
   tearDown(() => dir.deleteSync(recursive: true));
 
-  AiRequest req(PreparedMaterial m, {bool retry = false, double fps = 2}) {
+  AiRequest req(PreparedMaterial m,
+      {bool retry = false, double fps = 2, String? thinking}) {
     final r = AiRequest(
       danceId: 'samba',
       systemPrompt: 'SYSTEM',
       userPrompt: 'USER',
       mode: m.video != null ? SubmissionMode.video : SubmissionMode.frames,
       material: m,
-      reportSchema: const {},
+      reportSchema: const {
+        r'$schema': 'https://json-schema.org/draft/2020-12/schema',
+        r'$id': 'urn:x',
+        'type': 'object',
+      },
       videoFps: fps,
+      thinkingLevel: thinking,
     );
     return retry ? r.retry(note: 'RETRY NOTE', previous: 'PREVIOUS') : r;
   }
@@ -168,7 +174,7 @@ void main() {
       final r = await analyze(google(http), req(frames));
       final c = http.calls.single;
       expect(c.uri.toString(),
-          'https://g.test/v1beta/models/gemini-3.8-flash:generateContent');
+          'https://g.test/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse');
       expect(c.uri.toString(), isNot(contains(_key)));
       expect(c.headers['x-goog-api-key'], _key);
       final b = FakeHttp.body(c);
@@ -181,10 +187,91 @@ void main() {
       expect(parts.last, {'text': 'USER'});
       expect(b['generationConfig']['responseMimeType'], 'application/json');
       expect(b['generationConfig']['maxOutputTokens'], maxOutputTokens);
-      expect(b['generationConfig'].containsKey('responseSchema'), isFalse);
+      // Строгая схема — наша, без $schema/$id (иначе Google не находит $ref).
+      final schema = b['generationConfig']['responseJsonSchema'] as Map;
+      expect(schema['type'], 'object');
+      expect(schema.containsKey(r'$schema'), isFalse);
+      expect(schema.containsKey(r'$id'), isFalse);
+      expect(b['generationConfig'].containsKey('thinkingConfig'), isFalse);
       expect(r.text, _report);
       expect(r.usage!.inputTokens, 1000);
       expect(r.usage!.thinkingTokens, 50);
+    });
+
+    test('поток SSE: текст склеивается из фрагментов без «мыслей», токены и '
+        'причина — из последних; живой прогресс получения', () async {
+      String chunk(Map<String, Object?> j) => 'data: ${jsonEncode(j)}\r\n\r\n';
+      final sse = [
+        chunk({
+          'candidates': [
+            {
+              'content': {
+                'parts': [
+                  {'text': 'думаю', 'thought': true},
+                  {'text': '{"dance_id": '},
+                ]
+              }
+            }
+          ]
+        }),
+        chunk({
+          'candidates': [
+            {
+              'content': {
+                'parts': [
+                  {'text': '"samba"}'}
+                ]
+              },
+              'finishReason': 'STOP'
+            }
+          ],
+          'usageMetadata': {
+            'promptTokenCount': 11,
+            'candidatesTokenCount': 22,
+            'thoughtsTokenCount': 33
+          },
+        }),
+      ].join();
+      final http = FakeHttp((c, i) => textResult(200, sse));
+      final progress = <AiProgress>[];
+      final r = await analyze(google(http), req(frames), progress: progress);
+      expect(r.text, _report);
+      expect(r.finishReason, 'STOP');
+      expect(r.usage!.inputTokens, 11);
+      expect(r.usage!.thinkingTokens, 33);
+      expect(progress.last.receivedBytes, utf8.encode(sse).length);
+    });
+
+    test('поток SSE: ошибка внутри потока → вид ошибки', () async {
+      final http = FakeHttp((c, i) => textResult(200,
+          'data: ${jsonEncode({'error': {'code': 503, 'message': 'high demand', 'status': 'UNAVAILABLE'}})}\n\n'));
+      await expectLater(analyze(google(http), req(frames)),
+          throwsA(isA<AiException>().having((e) => e.kind, 'kind', AiErrorKind.server)));
+    });
+
+    test('схема не принята (400 про схему) → один повтор без схемы', () async {
+      final http = FakeHttp((c, i) => i == 0
+          ? jsonResult(400, {
+              'error': {
+                'code': 400,
+                'message': 'reference to undefined schema at properties.x',
+                'status': 'INVALID_ARGUMENT'
+              }
+            })
+          : googleOk(_report));
+      final r = await analyze(google(http), req(frames));
+      expect(http.calls, hasLength(2));
+      final g2 = FakeHttp.body(http.calls[1])['generationConfig'] as Map;
+      expect(g2.containsKey('responseJsonSchema'), isFalse);
+      expect(g2['responseMimeType'], 'application/json');
+      expect(r.notes.single, contains('схема ответа не принята'));
+    });
+
+    test('уровень размышления → thinkingConfig.thinkingLevel', () async {
+      final http = FakeHttp((c, i) => googleOk(_report));
+      await analyze(google(http), req(frames, thinking: 'high'));
+      expect(FakeHttp.body(http.calls.single)['generationConfig']['thinkingConfig'],
+          {'thinkingLevel': 'HIGH'});
     });
 
     test('повтор: прошлый ответ — сообщение model, затем описание ошибок', () async {
@@ -249,7 +336,7 @@ void main() {
         final progress = <AiProgress>[];
         final r = await analyze(google(http, inlineMax: 10), req(video),
             progress: progress);
-        final gen = http.calls.firstWhere((c) => c.uri.path.endsWith(':generateContent'));
+        final gen = http.calls.firstWhere((c) => c.uri.path.endsWith(':streamGenerateContent'));
         final part = (FakeHttp.body(gen)['contents'][0]['parts'] as List).first;
         expect(part['fileData'],
             {'mimeType': 'video/mp4', 'fileUri': 'https://g.test/v1beta/files/abc'});
@@ -294,7 +381,7 @@ void main() {
         await expectLater(analyze(google(http, inlineMax: 10), req(video)),
             throwsA(isA<AiException>()));
         expect(http.calls.last.method, 'DELETE');
-        expect(http.calls.where((c) => c.uri.path.endsWith(':generateContent')), isEmpty);
+        expect(http.calls.where((c) => c.uri.path.endsWith(':streamGenerateContent')), isEmpty);
       });
     });
 

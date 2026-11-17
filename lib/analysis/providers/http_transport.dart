@@ -76,6 +76,7 @@ abstract interface class HttpTransport {
     HttpCall call, {
     required CancelToken cancel,
     void Function(double fraction)? onUpload,
+    void Function(int receivedBytes)? onReceive,
   });
 }
 
@@ -98,6 +99,7 @@ class IoHttpTransport implements HttpTransport {
     HttpCall call, {
     required CancelToken cancel,
     void Function(double fraction)? onUpload,
+    void Function(int receivedBytes)? onReceive,
   }) async {
     cancel.throwIfCancelled();
     final client = HttpClient()
@@ -141,9 +143,14 @@ class IoHttpTransport implements HttpTransport {
       onUpload?.call(1);
 
       final response = await request.close().timeout(call.responseTimeout);
-      final bytes = await response
-          .fold<BytesBuilder>(BytesBuilder(copy: false), (b, d) => b..add(d))
-          .timeout(call.responseTimeout);
+      // Тело читается по мере прихода: при потоковой отдаче — живой
+      // прогресс «получено N байт».
+      final bytes = await response.fold<BytesBuilder>(
+          BytesBuilder(copy: false), (b, d) {
+        b.add(d);
+        onReceive?.call(b.length);
+        return b;
+      }).timeout(call.responseTimeout);
       final headers = <String, String>{};
       response.headers.forEach((name, values) {
         headers[name.toLowerCase()] = values.join(', ');

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../ai_provider.dart';
 import '../cancel_token.dart';
 import '../video_preparer.dart';
@@ -21,9 +23,14 @@ class _UploadedFile {
 ///   File API: загрузка → ожидание ACTIVE → ссылка → DELETE после анализа;
 /// - `videoMetadata.fps` — частота, с которой модель смотрит видео (по
 ///   умолчанию 1, до 24);
-/// - JSON-режим — `responseMimeType: application/json` без схемы;
-/// - «размышление» у gemini-3.8-flash не отключается и входит в
-///   `maxOutputTokens`; temperature/topP/topK для Gemini 3.6+ не передаём.
+/// - ответ — потоком (`streamGenerateContent?alt=sse`): без потока сервер
+///   закрывал соединение примерно через 240 с (живая проверка); поток даёт
+///   и живой прогресс. Каждая строка `data:` — GenerateContentResponse;
+/// - JSON-режим со строгой схемой (`responseJsonSchema` — наша схема без
+///   `$schema`/`$id`); не принята (400 про схему) — повтор без неё;
+/// - «размышление»: `thinkingConfig.thinkingLevel` (LOW/MEDIUM/HIGH; у
+///   gemini-3.8-flash не отключается) входит в `maxOutputTokens`;
+///   temperature/topP/topK для Gemini 3.6+ не передаём.
 class GoogleProvider extends HttpAiProvider {
   GoogleProvider({
     required super.model,
@@ -46,10 +53,14 @@ class GoogleProvider extends HttpAiProvider {
     // File API принимает файлы до 2 ГБ — облегчённая копия всегда меньше.
     maxVideoBytes: null,
     videoFpsConfigurable: true,
+    thinkingConfigurable: true,
   );
 
   @override
   AiCapabilities get capabilities => capabilitiesStatic;
+
+  @override
+  bool get usesSchema => true;
 
   String get _model => model.startsWith('models/') ? model.substring(7) : model;
   Map<String, String> get _auth => {'x-goog-api-key': key};
@@ -188,7 +199,7 @@ class GoogleProvider extends HttpAiProvider {
 
     return HttpCall.json(
       'POST',
-      Uri.parse('$baseUrl/v1beta/models/$_model:generateContent'),
+      Uri.parse('$baseUrl/v1beta/models/$_model:streamGenerateContent?alt=sse'),
       {
         'systemInstruction': {
           'parts': [
@@ -215,6 +226,12 @@ class GoogleProvider extends HttpAiProvider {
         'generationConfig': {
           if (o.limitTokens) 'maxOutputTokens': maxOutputTokens,
           if (o.jsonMode) 'responseMimeType': 'application/json',
+          if (o.jsonMode && o.useSchema)
+            'responseJsonSchema': providerSchema(request.reportSchema),
+          if (request.thinkingLevel != null)
+            'thinkingConfig': {
+              'thinkingLevel': request.thinkingLevel!.toUpperCase(),
+            },
         },
       },
       headers: _auth,
@@ -226,44 +243,83 @@ class GoogleProvider extends HttpAiProvider {
     'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT',
   };
 
+  /// Ответ потока: строки `data: {GenerateContentResponse}`. Текст —
+  /// склейка частей (без «мыслей»), причина завершения и токены — из
+  /// последних фрагментов. Обычный JSON (не поток) тоже понимаем.
   @override
   AiResponse parse(HttpResult r,
       {required int sentBytes, required List<String> notes}) {
-    final body = bodyOf(r);
-    final feedback = body['promptFeedback'];
-    final block = feedback is Map ? feedback['blockReason'] : null;
-    final candidates = body['candidates'];
-    if (block != null && (candidates is! List || candidates.isEmpty)) {
-      throw AiException(AiErrorKind.blocked, 'promptFeedback.blockReason: $block');
-    }
-    if (candidates is! List || candidates.isEmpty) throw malformed(r);
-    final c = candidates.first as Map;
-    final finish = c['finishReason'] as String?;
-    final content = c['content'];
-    final text = StringBuffer();
-    if (content is Map && content['parts'] is List) {
-      for (final p in content['parts'] as List) {
-        if (p is Map && p['thought'] != true && p['text'] is String) {
-          text.write(p['text']);
+    final chunks = <Map>[];
+    final raw = r.text.trimLeft();
+    if (raw.startsWith('data:') || raw.contains('\ndata:')) {
+      for (final line in const LineSplitter().convert(raw)) {
+        if (!line.startsWith('data:')) continue;
+        final payload = line.substring(5).trim();
+        if (payload.isEmpty || payload == '[DONE]') continue;
+        try {
+          final j = jsonDecode(payload);
+          if (j is Map) chunks.add(j);
+        } on FormatException {
+          // Битый фрагмент потока — пропускаем; итог проверит валидатор.
         }
       }
+    } else {
+      final j = r.json;
+      if (j is Map) chunks.add(j);
+      if (j is List) chunks.addAll(j.whereType<Map>());
+    }
+    if (chunks.isEmpty) throw malformed(r);
+
+    final text = StringBuffer();
+    String? finish;
+    Object? block;
+    Map? usage;
+    for (final c in chunks) {
+      final err = c['error'];
+      if (err is Map) {
+        throw httpError(
+            HttpResult(asInt(err['code']) ?? 500, const {},
+                utf8.encode(jsonEncode(c))),
+            key: key);
+      }
+      final feedback = c['promptFeedback'];
+      if (feedback is Map && feedback['blockReason'] != null) {
+        block = feedback['blockReason'];
+      }
+      if (c['usageMetadata'] is Map) usage = c['usageMetadata'] as Map;
+      final candidates = c['candidates'];
+      if (candidates is! List || candidates.isEmpty) continue;
+      final cand = candidates.first as Map;
+      finish = (cand['finishReason'] as String?) ?? finish;
+      final content = cand['content'];
+      if (content is Map && content['parts'] is List) {
+        for (final p in content['parts'] as List) {
+          if (p is Map && p['thought'] != true && p['text'] is String) {
+            text.write(p['text']);
+          }
+        }
+      }
+    }
+    if (text.isEmpty && block != null) {
+      throw AiException(AiErrorKind.blocked, 'promptFeedback.blockReason: $block');
     }
     if (text.isEmpty && _blockedReasons.contains(finish)) {
       throw AiException(AiErrorKind.blocked, 'finishReason: $finish');
     }
-    final u = body['usageMetadata'];
+    if (text.isEmpty && finish == null) throw malformed(r);
+    final u = usage;
     return AiResponse(
       text: extractJson(text.toString()),
       finishReason: finish,
       sentBytes: sentBytes,
       notes: notes,
-      usage: u is Map
-          ? AiUsage(
+      usage: u == null
+          ? null
+          : AiUsage(
               inputTokens: asInt(u['promptTokenCount']),
               outputTokens: asInt(u['candidatesTokenCount']),
               thinkingTokens: asInt(u['thoughtsTokenCount']),
-            )
-          : null,
+            ),
     );
   }
 

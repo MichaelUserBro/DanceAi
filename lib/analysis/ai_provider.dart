@@ -9,6 +9,7 @@ class AiCapabilities {
     this.frameOptions = const FrameOptions(),
     this.maxVideoBytes,
     this.videoFpsConfigurable = false,
+    this.thinkingConfigurable = false,
   });
 
   /// Адаптер умеет передавать видео целиком. Если нет — переключатель
@@ -22,6 +23,9 @@ class AiCapabilities {
 
   /// API позволяет задать частоту кадров, с которой модель смотрит видео.
   final bool videoFpsConfigurable;
+
+  /// API позволяет задать уровень «размышления» модели.
+  final bool thinkingConfigurable;
 }
 
 /// Материал + промпт → текст ответа. Общий для всех адаптеров.
@@ -34,6 +38,7 @@ class AiRequest {
     required this.material,
     required this.reportSchema,
     this.videoFps = 2,
+    this.thinkingLevel,
     this.retryNote,
     this.previousResponse,
   });
@@ -51,6 +56,9 @@ class AiRequest {
   /// Частота, с которой модель смотрит видео (если API это позволяет).
   final double videoFps;
 
+  /// Уровень «размышления»: low / medium / high; null — по умолчанию модели.
+  final String? thinkingLevel;
+
   /// Повторный запрос: описание ошибок проверки и прошлый ответ.
   final String? retryNote;
   final String? previousResponse;
@@ -66,6 +74,7 @@ class AiRequest {
         material: material,
         reportSchema: reportSchema,
         videoFps: videoFps,
+        thinkingLevel: thinkingLevel,
         retryNote: note,
         previousResponse: previous,
       );
@@ -76,9 +85,12 @@ class AiRequest {
 enum AiPhase { sending, processing, waiting }
 
 class AiProgress {
-  const AiProgress(this.phase, [this.fraction]);
+  const AiProgress(this.phase, [this.fraction, this.receivedBytes]);
   final AiPhase phase;
   final double? fraction;
+
+  /// Сколько байт ответа уже получено (потоковая отдача) — живой прогресс.
+  final int? receivedBytes;
 }
 
 enum AiErrorKind {

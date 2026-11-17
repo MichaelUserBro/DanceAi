@@ -121,6 +121,21 @@ AiException httpError(HttpResult r, {required String? key, bool freeTier = false
   );
 }
 
+/// Ошибка 400 из-за строгой схемы ответа (провайдер её не принял).
+bool isSchemaRejected(HttpResult r) {
+  if (r.status != 400) return false;
+  final m = errorMessage(r).toLowerCase();
+  return m.contains('schema');
+}
+
+/// Схема отчёта для провайдера: без `$schema` и `$id` — с `$id` Google не
+/// находит ссылки `$ref` на `$defs` (живая проверка, 400 «reference to
+/// undefined schema»).
+Map<String, dynamic> providerSchema(Map<String, dynamic> schema) =>
+    Map.of(schema)
+      ..remove(r'$schema')
+      ..remove(r'$id');
+
 /// Ошибка 400 из-за JSON-режима: модель/сервер его не поддерживает.
 bool isJsonModeRejected(HttpResult r) {
   if (r.status != 400 && r.status != 422) return false;

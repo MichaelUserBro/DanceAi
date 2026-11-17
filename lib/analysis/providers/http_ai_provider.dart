@@ -9,9 +9,20 @@ import 'provider_common.dart';
 /// Параметры запроса, которые адаптер может ослабить при повторе:
 /// JSON-режим и лимит ответа (не все модели/серверы их принимают).
 class CallOptions {
-  const CallOptions({this.jsonMode = true, this.limitTokens = true});
+  const CallOptions(
+      {this.jsonMode = true, this.limitTokens = true, this.useSchema = true});
   final bool jsonMode;
   final bool limitTokens;
+
+  /// Строгая схема ответа (где адаптер её передаёт).
+  final bool useSchema;
+
+  CallOptions copyWith({bool? jsonMode, bool? limitTokens, bool? useSchema}) =>
+      CallOptions(
+        jsonMode: jsonMode ?? this.jsonMode,
+        limitTokens: limitTokens ?? this.limitTokens,
+        useSchema: useSchema ?? this.useSchema,
+      );
 }
 
 /// Общая часть адаптеров на HTTP: отправка с прогрессом, один повтор без
@@ -42,6 +53,9 @@ abstract class HttpAiProvider implements AiProvider {
 
   /// API допускает запрос без лимита ответа (у части API он обязателен).
   bool get canDropTokenLimit => true;
+
+  /// Адаптер передаёт строгую схему ответа ([CallOptions.useSchema]).
+  bool get usesSchema => false;
 
   /// Бесплатная модель с дневным лимитом (подсказка в ошибке 429).
   bool get freeTier => false;
@@ -76,7 +90,7 @@ abstract class HttpAiProvider implements AiProvider {
       onProgress(const AiProgress(AiPhase.sending, 0));
       media = await prepareMedia(request, onProgress, cancel, notes);
       var options = const CallOptions();
-      for (var attempt = 0; attempt < 3; attempt++) {
+      for (var attempt = 0; attempt < 4; attempt++) {
         cancel.throwIfCancelled();
         final call = await buildCall(request, media, options);
         onProgress(const AiProgress(AiPhase.sending, 0));
@@ -86,17 +100,25 @@ abstract class HttpAiProvider implements AiProvider {
           onUpload: (f) => onProgress(f < 1
               ? AiProgress(AiPhase.sending, f)
               : const AiProgress(AiPhase.waiting)),
+          onReceive: (n) => onProgress(AiProgress(AiPhase.waiting, null, n)),
         );
         cancel.throwIfCancelled();
         if (!r.ok) {
+          if (options.useSchema && usesSchema && isSchemaRejected(r)) {
+            notes.add(redact(
+                'схема ответа не принята (${errorMessage(r)}) — повтор без неё',
+                key));
+            options = options.copyWith(useSchema: false);
+            continue;
+          }
           if (options.jsonMode && isJsonModeRejected(r)) {
             notes.add('JSON-режим не принят (HTTP ${r.status}) — повтор без него');
-            options = CallOptions(jsonMode: false, limitTokens: options.limitTokens);
+            options = options.copyWith(jsonMode: false);
             continue;
           }
           if (options.limitTokens && canDropTokenLimit && _isTokenLimitRejected(r)) {
             notes.add('лимит ответа не принят (HTTP ${r.status}) — повтор без него');
-            options = CallOptions(jsonMode: options.jsonMode, limitTokens: false);
+            options = options.copyWith(limitTokens: false);
             continue;
           }
           throw httpError(r, key: key, freeTier: freeTier);

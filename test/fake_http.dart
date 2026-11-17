@@ -21,13 +21,20 @@ class FakeHttp implements HttpTransport {
     HttpCall call, {
     required CancelToken cancel,
     void Function(double fraction)? onUpload,
+    void Function(int receivedBytes)? onReceive,
   }) async {
     cancel.throwIfCancelled();
     calls.add(call);
     onUpload?.call(0.5);
     onUpload?.call(1);
-    final r = await handler(call, calls.length - 1);
+    // Как настоящий транспорт: отмена обрывает ожидание ответа сразу.
+    final r = await Future.any<HttpResult?>([
+      Future.sync(() => handler(call, calls.length - 1)),
+      cancel.whenCancelled.then((_) => null),
+    ]);
     cancel.throwIfCancelled();
+    if (r == null) throw StateError('ответа нет');
+    onReceive?.call(r.body.length);
     return r;
   }
 
