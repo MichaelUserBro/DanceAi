@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Запросы к API ИИ. В src/debug и src/profile разрешение есть только
+         для инструментов Flutter — release-сборке нужно это. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
     <application
         android:label="DanceAI"
         android:name="${applicationName}"
