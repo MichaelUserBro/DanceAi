@@ -1,0 +1,13 @@
+Copyright © 2026 Mikle Klepak. Все права защищены.
+
+Исходный код опубликован только для ознакомления. Использование, копирование, изменение и распространение кода или его частей без письменного разрешения автора запрещены.
+
+Сторонние компоненты (Flutter, FFmpeg, шрифты и др.) распространяются по своим лицензиям — см. раздел «Лицензии» в приложении. Настоящие условия не ограничивают прав, которые дают эти лицензии; в частности, для компонентов под GNU LGPL (FFmpeg, FFmpegKit) разрешены их изменение и замена, а также обратная разработка приложения для отладки таких изменений.
+
+---
+
+Copyright © 2026 Mikle Klepak. All rights reserved.
+
+The source code is published for viewing purposes only. Using, copying, modifying or distributing the code or any part of it without the author's written permission is prohibited.
+
+Third-party components (Flutter, FFmpeg, fonts, etc.) are distributed under their own licenses — see the "Лицензии" (Licenses) section in the app. These terms do not restrict any rights granted by those licenses; in particular, for components under the GNU LGPL (FFmpeg, FFmpegKit), modifying and replacing them, as well as reverse engineering the app to debug such modifications, are permitted.

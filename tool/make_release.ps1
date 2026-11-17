@@ -57,7 +57,10 @@ if (-not $env:JAVA_HOME) {
 
 # Проверяет подпись APK и возвращает SHA-256 отпечаток сертификата.
 function Get-ApkCertSha256([string]$apk) {
-    $text = (& $apksigner verify --print-certs $apk 2>&1 | Out-String)
+    # Java пишет предупреждения в stderr; при 'Stop' PowerShell 5.1 счёл бы их
+    # ошибкой. Успех определяем по коду возврата apksigner.
+    $ErrorActionPreference = 'Continue'
+    $text = (& $apksigner verify --print-certs $apk 2>&1 | ForEach-Object { "$_" } | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "apksigner verify не прошёл для ${apk}:`n$text" }
     if ($text -match 'CN=Android Debug') { throw "$apk подписан debug-ключом" }
     $m = [regex]::Match($text, 'certificate SHA-256 digest:\s*([0-9a-fA-F]+)')

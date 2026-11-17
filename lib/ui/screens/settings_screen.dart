@@ -89,6 +89,8 @@ class SettingsScreen extends StatelessWidget {
                   onTap: () => showLicensePage(
                     context: context,
                     applicationName: 'DanceAI',
+                    applicationLegalese:
+                        '© 2026 Mikle Klepak. Все права защищены.',
                   ),
                 ),
               ),
