@@ -29,6 +29,7 @@ void main() {
   late PreparedMaterial video;
 
   setUp(() {
+    HttpAiProvider.resetSchemaMemory();
     dir = Directory.systemTemp.createTempSync('danceai_prov_');
     final f1 = File('${dir.path}/f_00001.jpg')..writeAsBytesSync([1, 2, 3]);
     final f2 = File('${dir.path}/f_00002.jpg')..writeAsBytesSync([4, 5, 6]);
@@ -265,6 +266,30 @@ void main() {
       expect(g2.containsKey('responseJsonSchema'), isFalse);
       expect(g2['responseMimeType'], 'application/json');
       expect(r.notes.single, contains('схема ответа не принята'));
+    });
+
+    test('схема отклонена → до конца сеанса модель получает запрос без неё',
+        () async {
+      final rejected = jsonResult(400, {
+        'error': {
+          'code': 400,
+          'message': 'The specified schema produces a constraint that has '
+              'too many states for serving.',
+          'status': 'INVALID_ARGUMENT'
+        }
+      });
+      final http1 = FakeHttp((c, i) => i == 0 ? rejected : googleOk(_report));
+      await analyze(google(http1), req(frames));
+      expect(http1.calls, hasLength(2));
+
+      // Второй анализ той же модели: сразу без схемы, один запрос.
+      final http2 = FakeHttp((c, i) => googleOk(_report));
+      final r = await analyze(google(http2), req(frames));
+      expect(http2.calls, hasLength(1));
+      final g = FakeHttp.body(http2.calls.single)['generationConfig'] as Map;
+      expect(g.containsKey('responseJsonSchema'), isFalse);
+      expect(g['responseMimeType'], 'application/json');
+      expect(r.notes.single, contains('отклонила её ранее'));
     });
 
     test('уровень размышления → thinkingConfig.thinkingLevel', () async {
@@ -699,6 +724,42 @@ void main() {
   });
 
   group('общие функции', () {
+    test('providerSchema: упрощение report.schema.json', () {
+      final full = jsonDecode(File('assets/report.schema.json').readAsStringSync())
+          as Map<String, dynamic>;
+      final s = providerSchema(full);
+      final text = jsonEncode(s);
+      for (final k in const [
+        r'"$schema"', r'"$id"', '"enum"', '"minimum"', '"maximum"',
+        '"minItems"', '"maxItems"', '"format"', '"pattern"', '"title"',
+        '"additionalProperties"', '"const"',
+      ]) {
+        expect(text, isNot(contains('$k:')), reason: k);
+      }
+      // Ключевое слово description убрано, а одноимённое поле ошибки — нет.
+      final errorItem = s['properties']['errors']['items'] as Map;
+      expect((errorItem['properties'] as Map).keys, contains('description'));
+      expect(errorItem['properties']['description'], {'type': 'string'});
+      // Типы, обязательные поля и вложенность сохранены.
+      expect(s['type'], full['type']);
+      expect(s['required'], full['required']);
+      expect((s['properties'] as Map).keys, (full['properties'] as Map).keys);
+      expect(s['properties']['figures']['type'], 'array');
+      expect(s['properties']['scores']['properties']['technique'],
+          {r'$ref': r'#/$defs/component_score'});
+      expect((s[r'$defs'] as Map).keys, (full[r'$defs'] as Map).keys);
+      final leader = s['properties']['criteria_results']['items']['properties']
+          ['leader'] as Map;
+      expect(leader, {'type': ['string', 'null']});
+      // Каждый $ref указывает на существующее определение.
+      for (final m in RegExp(r'#/\$defs/(\w+)').allMatches(text)) {
+        expect((s[r'$defs'] as Map).containsKey(m.group(1)), isTrue);
+      }
+      // Исходная схема не изменилась.
+      expect(full.containsKey(r'$id'), isTrue);
+      expect(jsonEncode(full), contains('"enum"'));
+    });
+
     test('extractJson', () {
       expect(extractJson('```json\n{"a":1}\n```'), '{"a":1}');
       expect(extractJson('```\n{"a":1}\n```'), '{"a":1}');

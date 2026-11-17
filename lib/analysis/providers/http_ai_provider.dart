@@ -1,5 +1,6 @@
 import 'dart:convert';
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 
 import '../ai_provider.dart';
 import '../cancel_token.dart';
@@ -57,6 +58,19 @@ abstract class HttpAiProvider implements AiProvider {
   /// Адаптер передаёт строгую схему ответа ([CallOptions.useSchema]).
   bool get usesSchema => false;
 
+  /// Модели, отклонившие строгую схему, — до конца сеанса приложения,
+  /// чтобы не тратить лишний запрос на каждый анализ.
+  static final _schemaRejected = <String>{};
+
+  String get _schemaMemoryKey => '$runtimeType|$baseUrl|$model';
+
+  /// Схема для этой модели уже отклонялась в этом сеансе.
+  bool get schemaRejectedThisSession =>
+      _schemaRejected.contains(_schemaMemoryKey);
+
+  @visibleForTesting
+  static void resetSchemaMemory() => _schemaRejected.clear();
+
   /// Бесплатная модель с дневным лимитом (подсказка в ошибке 429).
   bool get freeTier => false;
 
@@ -90,6 +104,11 @@ abstract class HttpAiProvider implements AiProvider {
       onProgress(const AiProgress(AiPhase.sending, 0));
       media = await prepareMedia(request, onProgress, cancel, notes);
       var options = const CallOptions();
+      if (usesSchema && schemaRejectedThisSession) {
+        notes.add('строгая схема не отправлялась: модель отклонила её ранее '
+            'в этом сеансе');
+        options = options.copyWith(useSchema: false);
+      }
       for (var attempt = 0; attempt < 4; attempt++) {
         cancel.throwIfCancelled();
         final call = await buildCall(request, media, options);
@@ -109,6 +128,7 @@ abstract class HttpAiProvider implements AiProvider {
                 'схема ответа не принята (${errorMessage(r)}) — повтор без неё',
                 key));
             options = options.copyWith(useSchema: false);
+            _schemaRejected.add(_schemaMemoryKey);
             continue;
           }
           if (options.jsonMode && isJsonModeRejected(r)) {

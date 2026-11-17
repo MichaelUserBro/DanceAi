@@ -128,13 +128,47 @@ bool isSchemaRejected(HttpResult r) {
   return m.contains('schema');
 }
 
-/// Схема отчёта для провайдера: без `$schema` и `$id` — с `$id` Google не
-/// находит ссылки `$ref` на `$defs` (живая проверка, 400 «reference to
-/// undefined schema»).
-Map<String, dynamic> providerSchema(Map<String, dynamic> schema) =>
-    Map.of(schema)
-      ..remove(r'$schema')
-      ..remove(r'$id');
+/// Упрощённая схема отчёта для строгого режима провайдера: только типы,
+/// обязательные поля и вложенность (`type`, `properties`, `required`,
+/// `items`, `$ref`/`$defs`, `anyOf`/`oneOf`). Без перечислений, границ,
+/// форматов, описаний и `additionalProperties` — полную схему Google
+/// отклоняет (400 «too many states for serving»). Без `$schema` и `$id`:
+/// с `$id` Google не находит `$ref` на `$defs` (400 «reference to undefined
+/// schema»). Полная проверка ответа по report.schema.json — у приложения.
+Map<String, dynamic> providerSchema(Map<String, dynamic> schema) {
+  final out = _simplifyNode(schema);
+  final defs = schema[r'$defs'];
+  if (defs is Map) {
+    out[r'$defs'] = {
+      for (final e in defs.entries)
+        e.key as String: _simplifyNode(e.value as Map),
+    };
+  }
+  return out;
+}
+
+Map<String, dynamic> _simplifyNode(Map node) {
+  final ref = node[r'$ref'];
+  if (ref != null) return {r'$ref': ref};
+  final out = <String, dynamic>{};
+  if (node.containsKey('type')) out['type'] = node['type'];
+  final props = node['properties'];
+  if (props is Map) {
+    out['properties'] = {
+      for (final e in props.entries)
+        e.key as String: _simplifyNode(e.value as Map),
+    };
+  }
+  final required = node['required'];
+  if (required is List) out['required'] = List.of(required);
+  final items = node['items'];
+  if (items is Map) out['items'] = _simplifyNode(items);
+  for (final k in const ['anyOf', 'oneOf']) {
+    final v = node[k];
+    if (v is List) out[k] = [for (final s in v) _simplifyNode(s as Map)];
+  }
+  return out;
+}
 
 /// Ошибка 400 из-за JSON-режима: модель/сервер его не поддерживает.
 bool isJsonModeRejected(HttpResult r) {
