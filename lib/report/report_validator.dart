@@ -146,8 +146,11 @@ sealed class ParseOutcome {
 }
 
 class ParsedReport extends ParseOutcome {
-  const ParsedReport(this.report);
+  const ParsedReport(this.report, [this.json = const {}]);
   final DanceReport report;
+
+  /// Отчёт как его вернула модель (для «Сохранить JSON»).
+  final Map<String, dynamic> json;
 }
 
 class InvalidReport extends ParseOutcome {
@@ -198,5 +201,5 @@ ParseOutcome parseReport(String raw,
   }
   final problems = validator.validate(json, dance: dance);
   if (problems.isNotEmpty) return InvalidReport(problems, notJson: false);
-  return ParsedReport(DanceReport.fromJson(json));
+  return ParsedReport(DanceReport.fromJson(json), json);
 }

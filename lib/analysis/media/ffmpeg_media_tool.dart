@@ -100,6 +100,68 @@ class FfmpegMediaTool implements MediaTool {
     ], durationSec, onProgress, cancel);
   }
 
+  /// Аппаратный H.264 системы, запасной — встроенный MPEG-4 Part 2
+  /// (в сборке без GPL нет libx264).
+  static List<String> get defaultEncoders => Platform.isAndroid
+      ? const ['h264_mediacodec', 'mpeg4']
+      : Platform.isWindows
+          ? const ['h264_mf', 'mpeg4']
+          : const ['mpeg4'];
+
+  @override
+  Future<LightVideo> transcodeLight({
+    required String input,
+    required String outFile,
+    required LightVideoOptions options,
+    required double? durationSec,
+    required void Function(double fraction) onProgress,
+    required CancelToken cancel,
+  }) async {
+    final encoders =
+        options.encoders.isEmpty ? defaultEncoders : options.encoders;
+    final s = options.shortSidePx;
+    MediaToolException? last;
+    for (final codec in encoders) {
+      cancel.throwIfCancelled();
+      try {
+        await _run([
+          '-v', 'error', '-nostdin', '-y',
+          '-i', await _resolve(input),
+          '-sn', '-dn', '-map', '0:v:0', '-map', '0:a:0?',
+          '-vf',
+          'fps=${options.fps},'
+              "scale=w='if(lte(iw,ih),min($s,iw),-2)':h='if(lte(iw,ih),-2,min($s,ih))',"
+              'format=${codec == 'mpeg4' ? 'yuv420p' : 'nv12'}',
+          '-c:v', codec,
+          '-b:v', '${options.videoKbps}k',
+          if (codec == 'mpeg4') ...['-qmin', '3', '-qmax', '20'],
+          if (codec != 'mpeg4') ...['-g', '${options.fps * 2}'],
+          '-c:a', 'aac', '-b:a', '${options.audioKbps}k', '-ac', '1',
+          '-ar', '44100',
+          '-movflags', '+faststart', '-f', 'mp4',
+          outFile,
+        ], durationSec, onProgress, cancel);
+        final f = File(outFile);
+        final size = await f.exists() ? await f.length() : 0;
+        if (size == 0) throw MediaToolException('$codec: пустой файл');
+        final info = await probe(outFile);
+        return LightVideo(
+          path: outFile,
+          sizeBytes: size,
+          codec: codec,
+          width: info?.width,
+          height: info?.height,
+        );
+      } on MediaToolException catch (e) {
+        last = e;
+        try {
+          await File(outFile).delete();
+        } catch (_) {}
+      }
+    }
+    throw last ?? const MediaToolException('нет видеокодера');
+  }
+
   Future<void> _run(
     List<String> args,
     double? durationSec,

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../data/criteria.dart';
+import 'media/media_tool.dart';
 import 'music/music_analyzer.dart';
 import 'cancel_token.dart';
 
@@ -62,6 +63,7 @@ class PrepareRequest {
     required this.frameOptions,
     required this.workDir,
     this.diagnostics,
+    this.lightOptions = const LightVideoOptions(),
   });
 
   final String videoPath;
@@ -78,6 +80,9 @@ class PrepareRequest {
   /// Куда записывать сведения для «Для разработчика» (по ходу подготовки,
   /// поэтому видно и то, что успело выполниться до ошибки).
   final PrepareDiagnostics? diagnostics;
+
+  /// Параметры облегчённой копии (режим видео).
+  final LightVideoOptions lightOptions;
 }
 
 /// Уменьшенный кадр для «Для разработчика». Только в памяти:
@@ -121,6 +126,12 @@ class PrepareDiagnostics {
   double? musicAgreement;
 
   /// Почему подготовка или анализ музыки не удались (технически, без ключей).
+  /// Облегчённая копия (режим видео): размер, кодек, разрешение.
+  int? lightVideoBytes;
+  String? lightVideoCodec;
+  int? lightVideoWidth;
+  int? lightVideoHeight;
+
   final List<String> notes = [];
   final Map<PrepareStage, Duration> stageTimes = {};
 }
@@ -133,9 +144,14 @@ class PreparedMaterial {
     required this.frames,
     required this.fps,
     required this.musicAnalysis,
+    this.video,
   });
 
   final String videoPath;
+
+  /// Облегчённая копия для подачи видео целиком (во временной папке
+  /// анализа); null в режиме кадров.
+  final LightVideo? video;
   final double? durationSec;
 
   /// Пусто, если кадры не извлекались (подача видео целиком
@@ -149,7 +165,7 @@ class PreparedMaterial {
   final String musicAnalysis;
 }
 
-enum PrepareStage { checkingVideo, extractingFrames, analyzingMusic }
+enum PrepareStage { checkingVideo, extractingFrames, compressingVideo, analyzingMusic }
 
 class PrepareProgress {
   const PrepareProgress(this.stage, [this.fraction]);
@@ -160,7 +176,13 @@ class PrepareProgress {
   final double? fraction;
 }
 
-enum PrepareErrorKind { unreadable, noAudio }
+enum PrepareErrorKind {
+  unreadable,
+  noAudio,
+
+  /// Не удалось сделать облегчённую копию для подачи видео целиком.
+  encodeFailed,
+}
 
 class PrepareException implements Exception {
   const PrepareException(this.kind);

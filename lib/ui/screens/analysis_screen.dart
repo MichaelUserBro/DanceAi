@@ -19,9 +19,13 @@ import 'warning_screen.dart';
 
 /// Экран анализа (spec 8б.3): живое ожидание с этапами, прогресс, отмена.
 class AnalysisScreen extends StatefulWidget {
-  const AnalysisScreen({super.key, required this.session});
+  const AnalysisScreen(
+      {super.key, required this.session, this.forceFrames = false});
 
   final VideoSession session;
+
+  /// «Отправить кадрами» после ошибки режима видео.
+  final bool forceFrames;
 
   @override
   State<AnalysisScreen> createState() => _AnalysisScreenState();
@@ -41,6 +45,10 @@ class _AnalysisScreenState extends State<AnalysisScreen>
   final _done = <AnalysisStage>{};
   bool _retry = false;
   bool _started = false;
+  bool _demo = false;
+  bool _videoMode = false;
+  bool _processingSeen = false;
+  double? _fraction;
 
   @override
   void didChangeDependencies() {
@@ -80,15 +88,27 @@ class _AnalysisScreenState extends State<AnalysisScreen>
     // Сведения прошлого анализа (в т. ч. превью кадров) больше не храним.
     final trace = AnalysisTrace();
     services.dev.record(trace);
+    final settings = services.settings;
+    setState(() {
+      _demo = settings.demoMode;
+      _videoMode = !widget.forceFrames && settings.wantVideo;
+    });
     try {
-      final result = await services.createPipeline().run(
-            dance: dance,
-            videoPath: path,
-            wantVideo: services.settings.wantVideo,
-            cancel: _cancel,
-            trace: trace,
-            onProgress: _onProgress,
-          );
+      final pipeline = await services.createPipeline();
+      if (mounted) {
+        setState(() => _videoMode = _videoMode &&
+            pipeline.provider.capabilities.supportsVideo);
+      }
+      final result = await pipeline.run(
+        dance: dance,
+        videoPath: path,
+        wantVideo: settings.wantVideo,
+        forceFrames: widget.forceFrames,
+        videoFps: settings.videoFps,
+        cancel: _cancel,
+        trace: trace,
+        onProgress: _onProgress,
+      );
       services.dev.record(trace);
       // Видео больше не нужно — удаляем копию сразу после анализа.
       await session.release();
@@ -118,9 +138,24 @@ class _AnalysisScreenState extends State<AnalysisScreen>
         _done.add(s);
       }
       if (p.fraction == 1) _done.add(p.stage);
+      if (p.stage == AnalysisStage.processing) _processingSeen = true;
       _stage = p.stage;
+      _fraction = p.fraction;
       _retry = p.isRetry;
     });
+  }
+
+  /// «Отправка 45%» — где долю загрузки можно измерить.
+  String _stageLabel() {
+    final f = _fraction;
+    if ((_stage == AnalysisStage.sending ||
+            _stage == AnalysisStage.compressingVideo) &&
+        f != null &&
+        f > 0 &&
+        f < 1) {
+      return '${_stage.labelRu} ${(f * 100).round()}%';
+    }
+    return _stage.labelRu;
   }
 
   void _cancelAndClose() {
@@ -132,26 +167,38 @@ class _AnalysisScreenState extends State<AnalysisScreen>
   Widget build(BuildContext context) {
     final dance = widget.session.dance;
     final accent = DanceAccent.of(dance.style);
-    final stages = AnalysisStage.values;
+    // Этапы этого способа подачи: кадры или видео целиком.
+    final stages = [
+      for (final s in AnalysisStage.values)
+        if (switch (s) {
+          AnalysisStage.compressingVideo => _videoMode,
+          AnalysisStage.extractingFrames => !_videoMode,
+          AnalysisStage.processing => _processingSeen,
+          _ => true,
+        })
+          s,
+    ];
     final progress =
-        (_done.length + (_done.contains(_stage) ? 0 : 0.5)) / stages.length;
+        (stages.where(_done.contains).length +
+                (_done.contains(_stage) ? 0 : 0.5)) /
+            stages.length;
     final wide = isWide(context);
 
     final visual = _LiveVisual(
       pulse: _pulse,
       accent: accent,
       title: dance.nameRu,
-      subtitle: _retry ? 'Повторный запрос' : _stage.labelRu,
+      subtitle: _retry ? 'Повторный запрос' : _stageLabel(),
     );
 
     final steps = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!AdapterRegistry.realAdaptersAvailable)
+        if (_demo || !AdapterRegistry.realAdaptersAvailable)
           Align(
             alignment: Alignment.centerLeft,
             child: Pill(
-              label: 'Демо-режим: ИИ не подключён',
+              label: 'Демо-режим: без ИИ',
               color: StageColors.spotlight,
             ),
           ),

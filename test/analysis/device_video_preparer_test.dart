@@ -30,11 +30,17 @@ class _OkProvider implements AiProvider {
       const AiCapabilities(supportsVideo: true, frameOptions: FrameOptions());
 
   @override
-  Future<String> analyze(AiRequest request,
-      {required void Function(AiPhase) onPhase,
+  String get model => 'test';
+
+  @override
+  Future<ModelLookup?> lookupModel(CancelToken cancel) async => null;
+
+  @override
+  Future<AiResponse> analyze(AiRequest request,
+      {required void Function(AiProgress) onProgress,
       required CancelToken cancel}) async {
     last = request;
-    return answer;
+    return AiResponse(text: answer);
   }
 }
 
@@ -108,12 +114,20 @@ void main() {
       expect(diag.audioRmsDb, isNotNull);
       expect(diag.musicPeriodicity, greaterThan(0.1));
       expect(diag.musicAgreement, isNotNull);
-      expect(diag.stageTimes.keys, PrepareStage.values);
+      expect(diag.stageTimes.keys, [
+        PrepareStage.checkingVideo,
+        PrepareStage.extractingFrames,
+        PrepareStage.analyzingMusic,
+      ]);
       // Звук удаляется сразу после анализа музыки.
       expect(File('${work.path}/audio.f32').existsSync(), isFalse);
       // Этапы — по порядку.
       final stages = progress.map((p) => p.stage).toList();
-      expect(stages.toSet().toList(), PrepareStage.values);
+      expect(stages.toSet().toList(), [
+        PrepareStage.checkingVideo,
+        PrepareStage.extractingFrames,
+        PrepareStage.analyzingMusic,
+      ]);
     });
 
     test('нет звука → noAudio, кадры не извлекаются', () async {
@@ -184,7 +198,10 @@ void main() {
       final tool = FakeMediaTool();
       final r = await prepare(tool, mode: SubmissionMode.video);
       expect(r.frames, isEmpty);
-      expect(tool.calls, ['probe', 'audio']);
+      // Облегчённая копия — в папке анализа; кадров нет.
+      expect(tool.calls, ['probe', 'light', 'audio']);
+      expect(r.video, isNotNull);
+      expect(r.video!.path, startsWith(work.path));
     });
   });
 

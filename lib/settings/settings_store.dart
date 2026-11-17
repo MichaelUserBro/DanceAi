@@ -64,10 +64,17 @@ class SettingsStore extends ChangeNotifier {
   final _hasKey = <String, bool>{};
   String _customBaseUrl = '';
   StubScenario _scenario = StubScenario.normal;
+  bool _demoMode = false;
+  double _videoFps = 2;
 
   static const _kProvider = 'provider_id';
   static const _kCustomUrl = 'custom_base_url';
   static const _kScenario = 'stub_scenario';
+  static const _kDemo = 'demo_mode';
+  static const _kVideoFps = 'video_fps';
+
+  /// Частоты для видеорежима в «Для разработчика».
+  static const videoFpsChoices = [1.0, 2.0, 4.0];
   static String _kModel(String id) => 'model.$id';
   static String _kVideo(String id) => 'video_mode.$id';
 
@@ -75,6 +82,9 @@ class SettingsStore extends ChangeNotifier {
     _providerId = await _prefs.getString(_kProvider);
     _customBaseUrl = await _prefs.getString(_kCustomUrl) ?? '';
     _scenario = StubScenario.fromId(await _prefs.getString(_kScenario));
+    _demoMode = await _prefs.getBool(_kDemo) ?? false;
+    final fps = double.tryParse(await _prefs.getString(_kVideoFps) ?? '');
+    _videoFps = videoFpsChoices.contains(fps) ? fps! : 2;
     for (final p in catalog.all) {
       final model = await _prefs.getString(_kModel(p.id));
       if (model != null) _models[p.id] = model;
@@ -92,6 +102,12 @@ class SettingsStore extends ChangeNotifier {
   bool hasKeyFor(String providerId) => _hasKey[providerId] ?? false;
   String get customBaseUrl => _customBaseUrl;
   StubScenario get stubScenario => _scenario;
+
+  /// «Демо-режим (без ИИ)»: анализ через заглушку, без ключа и лимитов.
+  bool get demoMode => _demoMode;
+
+  /// Частота, с которой модель смотрит видео (где API это позволяет).
+  double get videoFps => _videoFps;
 
   /// Адаптер выбранного провайдера умеет передавать видео.
   bool canSendVideo(ProviderInfo p) =>
@@ -141,6 +157,22 @@ class SettingsStore extends ChangeNotifier {
     notifyListeners();
     await _prefs.setString(_kScenario, s.id);
   }
+
+  Future<void> setDemoMode(bool value) async {
+    _demoMode = value;
+    notifyListeners();
+    await _prefs.setBool(_kDemo, value);
+  }
+
+  Future<void> setVideoFps(double fps) async {
+    if (!videoFpsChoices.contains(fps)) return;
+    _videoFps = fps;
+    notifyListeners();
+    await _prefs.setString(_kVideoFps, '$fps');
+  }
+
+  /// Адрес API выбранного провайдера («Свой» — введённый пользователем).
+  String baseUrlFor(ProviderInfo p) => p.isCustom ? _customBaseUrl : p.baseUrl;
 
   Future<String?> readKey(String providerId) => keys.read(providerId);
 

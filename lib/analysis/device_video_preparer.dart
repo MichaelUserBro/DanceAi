@@ -84,12 +84,40 @@ class DeviceVideoPreparer implements VideoPreparer {
     _lap(diag, PrepareStage.checkingVideo, sw);
     onProgress(const PrepareProgress(PrepareStage.checkingVideo, 1));
 
-    // 3. Кадры (только при подаче кадрами, spec 7.3).
-    onProgress(const PrepareProgress(PrepareStage.extractingFrames, 0));
+    // 3а. Видео целиком: облегчённая копия (spec 7.3). Исходник не копируется.
+    LightVideo? light;
+    if (request.mode == SubmissionMode.video) {
+      onProgress(const PrepareProgress(PrepareStage.compressingVideo, 0));
+      try {
+        light = await tool.transcodeLight(
+          input: request.videoPath,
+          outFile: '${request.workDir.path}${sep}light.mp4',
+          options: request.lightOptions,
+          durationSec: duration,
+          onProgress: (f) =>
+              onProgress(PrepareProgress(PrepareStage.compressingVideo, f)),
+          cancel: cancel,
+        );
+      } on MediaToolException catch (e) {
+        diag.notes.add('сжатие видео: ${e.message}');
+        throw const PrepareException(PrepareErrorKind.encodeFailed);
+      }
+      cancel.throwIfCancelled();
+      diag
+        ..lightVideoBytes = light.sizeBytes
+        ..lightVideoCodec = light.codec
+        ..lightVideoWidth = light.width
+        ..lightVideoHeight = light.height;
+      _lap(diag, PrepareStage.compressingVideo, sw);
+      onProgress(const PrepareProgress(PrepareStage.compressingVideo, 1));
+    }
+
+    // 3б. Кадры (только при подаче кадрами, spec 7.3).
     var frames = const <VideoFrame>[];
     final opts = request.frameOptions;
     var fps = opts.fps;
     if (request.mode == SubmissionMode.frames) {
+      onProgress(const PrepareProgress(PrepareStage.extractingFrames, 0));
       final plan = planFrameRate(
           fps: opts.fps, maxFrames: opts.maxFrames, durationSec: duration);
       fps = plan.fps;
@@ -139,9 +167,9 @@ class DeviceVideoPreparer implements VideoPreparer {
         ..frameCount = frames.length
         ..actualFps = fps;
       await _previews(frames, diag, cancel);
+      _lap(diag, PrepareStage.extractingFrames, sw);
+      onProgress(const PrepareProgress(PrepareStage.extractingFrames, 1));
     }
-    _lap(diag, PrepareStage.extractingFrames, sw);
-    onProgress(const PrepareProgress(PrepareStage.extractingFrames, 1));
 
     // 4. Звук → анализ музыки. Неудача не мешает анализу танца.
     onProgress(const PrepareProgress(PrepareStage.analyzingMusic, 0));
@@ -156,6 +184,7 @@ class DeviceVideoPreparer implements VideoPreparer {
       frames: frames,
       fps: fps,
       musicAnalysis: music,
+      video: light,
     );
   }
 

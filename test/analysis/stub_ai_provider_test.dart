@@ -60,8 +60,8 @@ void main() {
     };
     for (final e in cases.entries) {
       test('${e.key.id}: текст ответа проходит обработку', () async {
-        final raw = await stub(e.key)
-            .analyze(request('samba'), onPhase: (_) {}, cancel: CancelToken());
+        final raw = (await stub(e.key)
+            .analyze(request('samba'), onProgress: (_) {}, cancel: CancelToken())).text;
         final outcome = parseReport(raw,
             dance: data.criteria.dance('samba'), validator: validator);
         expect(outcome, isA<ParsedReport>());
@@ -70,8 +70,8 @@ void main() {
     }
 
     test('invalid_json: ответ не проходит обработку', () async {
-      final raw = await stub(StubScenario.invalidJson)
-          .analyze(request('quickstep'), onPhase: (_) {}, cancel: CancelToken());
+      final raw = (await stub(StubScenario.invalidJson)
+          .analyze(request('quickstep'), onProgress: (_) {}, cancel: CancelToken())).text;
       expect(
           parseReport(raw,
               dance: data.criteria.dance('quickstep'), validator: validator),
@@ -87,7 +87,7 @@ void main() {
       test('${e.key.id}: ошибка API', () {
         expect(
           stub(e.key).analyze(request('cha_cha'),
-              onPhase: (_) {}, cancel: CancelToken()),
+              onProgress: (_) {}, cancel: CancelToken()),
           throwsA(isA<AiException>().having((x) => x.kind, 'kind', e.value)),
         );
       });
@@ -98,7 +98,7 @@ void main() {
           catalog: data.criteria, scenario: StubScenario.normal);
       final cancel = CancelToken();
       final future =
-          slow.analyze(request('samba'), onPhase: (_) {}, cancel: cancel);
+          slow.analyze(request('samba'), onProgress: (_) {}, cancel: cancel);
       cancel.cancel();
       await expectLater(future, throwsA(isA<AnalysisCancelled>()));
     });
@@ -129,8 +129,8 @@ void main() {
         'другой компонент; отчёт валиден', () async {
       for (var seed = 0; seed < 30; seed++) {
         final dance = data.criteria.dances[seed % data.criteria.dances.length];
-        final raw = await stub(StubScenario.partialScores, seed: seed)
-            .analyze(request(dance.id), onPhase: (_) {}, cancel: CancelToken());
+        final raw = (await stub(StubScenario.partialScores, seed: seed)
+            .analyze(request(dance.id), onProgress: (_) {}, cancel: CancelToken())).text;
         final outcome = parseReport(raw, dance: dance, validator: validator);
         expect(outcome, isA<ParsedReport>(), reason: 'seed $seed');
         final report = (outcome as ParsedReport).report;

@@ -38,6 +38,14 @@ class ErrorScreen extends StatelessWidget {
               session.onChooseOther?.call();
             },
           ),
+        FailureAction.sendFrames => (
+            'Отправить кадрами',
+            Icons.burst_mode_rounded,
+            canRetry
+                ? () => Navigator.of(context).pushReplacement(stageRoute(
+                    AnalysisScreen(session: session, forceFrames: true)))
+                : null,
+          ),
         FailureAction.openSettings => (
             'Открыть настройки',
             Icons.tune_rounded,
@@ -141,7 +149,12 @@ class ErrorScreen extends StatelessWidget {
           Icons.key_off_rounded,
         FailureKind.rateLimit => Icons.hourglass_bottom_rounded,
         FailureKind.network => Icons.wifi_off_rounded,
-        FailureKind.tooLarge => Icons.sd_card_alert_outlined,
+        FailureKind.tooLarge || FailureKind.videoTooLarge =>
+          Icons.sd_card_alert_outlined,
+        FailureKind.videoEncodeFailed => Icons.movie_filter_outlined,
+        FailureKind.modelUnavailable => Icons.psychology_alt_outlined,
+        FailureKind.insufficientFunds => Icons.account_balance_wallet_outlined,
+        FailureKind.blocked => Icons.block_rounded,
         FailureKind.invalidResponse => Icons.rule_rounded,
         FailureKind.server || FailureKind.internal =>
           Icons.error_outline_rounded,

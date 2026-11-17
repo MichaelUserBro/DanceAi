@@ -47,20 +47,31 @@ class StubAiProvider implements AiProvider {
   String get displayName => 'Демо-режим';
 
   @override
-  AiCapabilities get capabilities => const AiCapabilities(supportsVideo: true);
+  String get model => 'stub';
 
   @override
-  Future<String> analyze(
+  AiCapabilities get capabilities =>
+      const AiCapabilities(supportsVideo: true, videoFpsConfigurable: true);
+
+  @override
+  Future<ModelLookup?> lookupModel(CancelToken cancel) async => null;
+
+  @override
+  Future<AiResponse> analyze(
     AiRequest request, {
-    required void Function(AiPhase) onPhase,
+    required void Function(AiProgress) onProgress,
     required CancelToken cancel,
-  }) async {
+  }) async =>
+      AiResponse(text: await _text(request, onProgress, cancel));
+
+  Future<String> _text(AiRequest request, void Function(AiProgress) onProgress,
+      CancelToken cancel) async {
     final spanMs = maxDelay.inMilliseconds - minDelay.inMilliseconds;
     final total = minDelay.inMilliseconds +
         (spanMs > 0 ? _random.nextInt(spanMs + 1) : 0);
     final sendMs = (total * 0.2).round();
 
-    onPhase(AiPhase.sending);
+    onProgress(const AiProgress(AiPhase.sending));
     await cancel.delay(Duration(milliseconds: sendMs));
     switch (scenario) {
       case StubScenario.network:
@@ -69,7 +80,7 @@ class StubAiProvider implements AiProvider {
         throw const AiException(AiErrorKind.invalidKey, 'Заглушка: HTTP 401');
       default:
     }
-    onPhase(AiPhase.waiting);
+    onProgress(const AiProgress(AiPhase.waiting));
     await cancel.delay(Duration(milliseconds: total - sendMs));
 
     switch (scenario) {

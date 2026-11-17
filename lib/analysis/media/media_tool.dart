@@ -56,4 +56,52 @@ abstract interface class MediaTool {
     required void Function(double fraction) onProgress,
     required CancelToken cancel,
   });
+
+  /// Облегчённая копия для подачи видео целиком (spec 7.3): mp4, короткая
+  /// сторона не больше [shortSidePx], [fps] кадр/с, звук AAC моно.
+  /// Кодек — первый сработавший из [LightVideoOptions.encoders].
+  Future<LightVideo> transcodeLight({
+    required String input,
+    required String outFile,
+    required LightVideoOptions options,
+    required double? durationSec,
+    required void Function(double fraction) onProgress,
+    required CancelToken cancel,
+  });
+}
+
+/// Параметры облегчённой копии видео.
+class LightVideoOptions {
+  const LightVideoOptions({
+    this.shortSidePx = 480,
+    this.fps = 15,
+    this.videoKbps = 500,
+    this.audioKbps = 64,
+    this.encoders = const [],
+  });
+
+  final int shortSidePx;
+  final int fps;
+  final int videoKbps;
+  final int audioKbps;
+
+  /// Видеокодеры по порядку; пусто — по умолчанию для платформы.
+  final List<String> encoders;
+}
+
+/// Результат: путь, размер и кодек (для «Для разработчика»).
+class LightVideo {
+  const LightVideo({
+    required this.path,
+    required this.sizeBytes,
+    required this.codec,
+    this.width,
+    this.height,
+  });
+
+  final String path;
+  final int sizeBytes;
+  final String codec;
+  final int? width;
+  final int? height;
 }

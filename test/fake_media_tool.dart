@@ -17,6 +17,9 @@ class FakeMediaTool implements MediaTool {
     this.failAudio = false,
     this.hangOnFrames = false,
     this.hangOnAudio = false,
+    this.failLight = false,
+    this.hangOnLight = false,
+    this.lightSizeBytes = 4000,
   });
 
   final MediaInfo? info;
@@ -30,6 +33,12 @@ class FakeMediaTool implements MediaTool {
   final bool failAudio;
   final bool hangOnFrames;
   final bool hangOnAudio;
+  final bool failLight;
+  final bool hangOnLight;
+
+  /// Размер «облегчённой копии».
+  final int lightSizeBytes;
+  String? lastLightPath;
 
   final calls = <String>[];
   double? lastFps;
@@ -85,6 +94,25 @@ class FakeMediaTool implements MediaTool {
         samples.offsetInBytes, samples.lengthInBytes));
     await _maybeHang(hangOnAudio, cancel);
     if (failAudio) throw const MediaToolException('no audio decoder');
+  }
+
+  @override
+  Future<LightVideo> transcodeLight({
+    required String input,
+    required String outFile,
+    required LightVideoOptions options,
+    required double? durationSec,
+    required void Function(double fraction) onProgress,
+    required CancelToken cancel,
+  }) async {
+    calls.add('light');
+    lastLightPath = outFile;
+    File(outFile).writeAsBytesSync(List.filled(lightSizeBytes, 7));
+    onProgress(0.5);
+    await _maybeHang(hangOnLight, cancel);
+    if (failLight) throw const MediaToolException('no encoder');
+    return LightVideo(
+        path: outFile, sizeBytes: lightSizeBytes, codec: 'fake', width: 854, height: 480);
   }
 
   Future<void> _maybeHang(bool hang, CancelToken cancel) async {

@@ -1,6 +1,10 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../analysis/adapter_registry.dart';
+import '../analysis/ai_provider.dart';
+import '../analysis/analysis_failure.dart';
 import '../analysis/analysis_pipeline.dart';
+import '../analysis/providers/http_transport.dart';
 import '../analysis/stub_ai_provider.dart';
 import '../analysis/temp_storage.dart';
 import '../analysis/video_preparer.dart';
@@ -28,7 +32,8 @@ class AppServices {
     required this.tempStorage,
     required this.dev,
     required this.videoPicker,
-  });
+    HttpTransport? transport,
+  }) : transport = transport ?? IoHttpTransport();
 
   final AppData data;
   final SettingsStore settings;
@@ -36,16 +41,38 @@ class AppServices {
   final TempStorage tempStorage;
   final DevState dev;
   final VideoPicker videoPicker;
+  final HttpTransport transport;
 
-  /// Пока настоящих адаптеров нет, анализ всегда идёт через заглушку (spec 7.8).
-  AnalysisPipeline createPipeline() => AnalysisPipeline(
+  /// Адаптер выбранного провайдера; в «Демо-режиме» — заглушка (spec 7.8).
+  /// Не настроено — [AnalysisFailure] `notConfigured`.
+  Future<AiProvider> createProvider() async {
+    if (settings.demoMode) {
+      return StubAiProvider(
+          catalog: data.criteria, scenario: settings.stubScenario);
+    }
+    final p = settings.provider;
+    if (p == null || !settings.isConfigured) {
+      throw const AnalysisFailure(FailureKind.notConfigured);
+    }
+    final key = await settings.readKey(p.id);
+    if (key == null || key.isEmpty) {
+      throw const AnalysisFailure(FailureKind.notConfigured);
+    }
+    return AdapterRegistry.create(
+      provider: p,
+      model: settings.modelFor(p.id),
+      apiKey: key,
+      baseUrl: settings.baseUrlFor(p),
+      transport: transport,
+    );
+  }
+
+  Future<AnalysisPipeline> createPipeline() async => AnalysisPipeline(
         data: data,
         preparer: preparer,
-        provider: StubAiProvider(
-          catalog: data.criteria,
-          scenario: settings.stubScenario,
-        ),
+        provider: await createProvider(),
         tempStorage: tempStorage,
+        demo: settings.demoMode,
       );
 }
 

@@ -46,28 +46,41 @@ class FakePreparer implements VideoPreparer {
 
 /// Провайдер с заранее заданными ответами.
 class ScriptedProvider implements AiProvider {
-  ScriptedProvider(this.answers, {this.video = false});
+  ScriptedProvider(this.answers, {this.video = false, this.maxVideoBytes});
   final List<Object> answers; // String или AiException
   final bool video;
+  final int? maxVideoBytes;
   final requests = <AiRequest>[];
 
   @override
   String get displayName => 'Тест';
 
   @override
-  AiCapabilities get capabilities => AiCapabilities(supportsVideo: video);
+  String get model => 'test-model';
 
   @override
-  Future<String> analyze(AiRequest request,
-      {required void Function(AiPhase) onPhase,
+  Future<ModelLookup?> lookupModel(CancelToken cancel) async => null;
+
+  @override
+  AiCapabilities get capabilities =>
+      AiCapabilities(supportsVideo: video, maxVideoBytes: maxVideoBytes);
+
+  /// Существовал ли файл облегчённой копии в момент запроса.
+  final lightExisted = <bool>[];
+
+  @override
+  Future<AiResponse> analyze(AiRequest request,
+      {required void Function(AiProgress) onProgress,
       required CancelToken cancel}) async {
     requests.add(request);
-    onPhase(AiPhase.sending);
-    onPhase(AiPhase.waiting);
+    final v = request.material.video;
+    if (v != null) lightExisted.add(File(v.path).existsSync());
+    onProgress(const AiProgress(AiPhase.sending, 0.5));
+    onProgress(const AiProgress(AiPhase.waiting));
     final a = answers[requests.length - 1];
     if (a is AiException) throw a;
     cancel.throwIfCancelled();
-    return a as String;
+    return AiResponse(text: a as String, sentBytes: 100);
   }
 }
 
@@ -114,7 +127,18 @@ void main() {
         stages: stages, trace: trace);
     expect(result.report.danceId, 'slow_waltz');
     expect(result.retried, isFalse);
-    expect(stages.toSet().toList(), AnalysisStage.values);
+    expect(stages.toSet().toList(), [
+      AnalysisStage.checkingVideo,
+      AnalysisStage.extractingFrames,
+      AnalysisStage.analyzingMusic,
+      AnalysisStage.sending,
+      AnalysisStage.analyzing,
+      AnalysisStage.validating,
+    ]);
+    expect(trace.attempts, hasLength(1));
+    expect(trace.attempts.single.sentBytes, 100);
+    expect(trace.model, 'test-model');
+    expect(trace.reportJson?['dance_id'], 'slow_waltz');
     expect(prep.lastWorkDir!.existsSync(), isFalse);
     expect(workDirsLeft(), isFalse);
     expect(trace.prompt!.user, isNot(contains('{{')));
