@@ -113,7 +113,8 @@ enum AiErrorKind {
 
 /// Ошибка API. Текст никогда не содержит ключа.
 class AiException implements Exception {
-  const AiException(this.kind, [this.detail, this.retryAfter, this.freeTier = false]);
+  const AiException(this.kind,
+      [this.detail, this.retryAfter, this.freeTier = false, this.notes = const []]);
 
   final AiErrorKind kind;
 
@@ -125,6 +126,14 @@ class AiException implements Exception {
 
   /// Бесплатная модель с дневным лимитом — подсказка в тексте ошибки.
   final bool freeTier;
+
+  /// Заметки адаптера до ошибки (например, «схема ответа не принята»)
+  /// для «Для разработчика». Без ключа.
+  final List<String> notes;
+
+  /// Та же ошибка с заметками адаптера.
+  AiException withNotes(List<String> notes) =>
+      AiException(kind, detail, retryAfter, freeTier, List.unmodifiable(notes));
 
   @override
   String toString() => 'AiException($kind${detail == null ? '' : ': $detail'})';

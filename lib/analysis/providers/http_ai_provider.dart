@@ -100,6 +100,7 @@ abstract class HttpAiProvider implements AiProvider {
   }) async {
     final notes = <String>[];
     Object? media;
+    var cleaned = false;
     try {
       onProgress(const AiProgress(AiPhase.sending, 0));
       media = await prepareMedia(request, onProgress, cancel, notes);
@@ -148,14 +149,16 @@ abstract class HttpAiProvider implements AiProvider {
       }
       throw const AiException(AiErrorKind.server, 'запрос не принят');
     } on AiException catch (e) {
-      // Последняя страховка: ключ не должен попасть в подробности.
-      final d = e.detail;
-      if (d != null && redact(d, key) != d) {
-        throw AiException(e.kind, redact(d, key), e.retryAfter, e.freeTier);
-      }
-      rethrow;
-    } finally {
+      // Очистка до ошибки — чтобы её заметки (удаление файла) попали в неё.
+      cleaned = true;
       await cleanup(media, notes);
+      // Последняя страховка: ключ не должен попасть в подробности и заметки.
+      final d = e.detail;
+      throw AiException(e.kind, d == null ? null : redact(d, key), e.retryAfter,
+              e.freeTier)
+          .withNotes([for (final n in [...e.notes, ...notes]) redact(n, key)]);
+    } finally {
+      if (!cleaned) await cleanup(media, notes);
     }
   }
 

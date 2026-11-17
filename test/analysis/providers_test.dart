@@ -268,6 +268,28 @@ void main() {
       expect(r.notes.single, contains('схема ответа не принята'));
     });
 
+    test('схема не принята, затем 503 → заметка о схеме в ошибке', () async {
+      final http = FakeHttp((c, i) => i == 0
+          ? jsonResult(400, {
+              'error': {
+                'code': 400,
+                'message': 'too many states for serving (schema) $_key',
+                'status': 'INVALID_ARGUMENT'
+              }
+            })
+          : jsonResult(503, {
+              'error': {'code': 503, 'message': 'high demand', 'status': 'UNAVAILABLE'}
+            }));
+      await expectLater(
+          analyze(google(http), req(frames)),
+          throwsA(isA<AiException>()
+              .having((e) => e.kind, 'kind', AiErrorKind.server)
+              .having((e) => e.notes.single, 'notes',
+                  allOf(contains('схема ответа не принята'),
+                      isNot(contains(_key))))));
+      expect(http.calls, hasLength(2));
+    });
+
     test('схема отклонена → до конца сеанса модель получает запрос без неё',
         () async {
       final rejected = jsonResult(400, {
@@ -373,10 +395,14 @@ void main() {
         expect(r.sentBytes, greaterThanOrEqualTo(30));
       });
 
-      test('ошибка ответа — файл всё равно удаляется', () async {
+      test('ошибка ответа — файл всё равно удаляется, заметки в ошибке', () async {
         final http = fileApi(generate: jsonResult(500, {'error': {'message': 'x'}}));
-        await expectLater(analyze(google(http, inlineMax: 10), req(video)),
-            throwsA(isA<AiException>().having((e) => e.kind, 'kind', AiErrorKind.server)));
+        await expectLater(
+            analyze(google(http, inlineMax: 10), req(video)),
+            throwsA(isA<AiException>()
+                .having((e) => e.kind, 'kind', AiErrorKind.server)
+                .having((e) => e.notes.join(' '), 'notes',
+                    allOf(contains('загружено через File API'), contains('удалён')))));
         expect(http.calls.last.method, 'DELETE');
       });
 

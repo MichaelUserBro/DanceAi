@@ -319,6 +319,7 @@ class AnalysisPipeline {
         } on AiException catch (e) {
           record
             ..totalTime = sw.elapsed
+            ..notes = e.notes
             ..error =
                 '${e.kind.name}${e.detail == null ? '' : ': ${e.detail}'}';
           throw AnalysisFailure.fromAi(e,

@@ -178,6 +178,19 @@ void main() {
     expect(prep.lastWorkDir!.existsSync(), isFalse);
   });
 
+  test('ошибка API → заметки адаптера попадают в трассировку', () async {
+    final trace = AnalysisTrace();
+    final ai = ScriptedProvider([
+      const AiException(AiErrorKind.server, 'HTTP 503')
+          .withNotes(['схема ответа не принята — повтор без неё']),
+    ]);
+    await expectLater(run(pipeline(FakePreparer(), ai), trace: trace),
+        throwsA(isA<AnalysisFailure>()));
+    expect(trace.attempts.single.notes, ['схема ответа не принята — повтор без неё']);
+    expect(trace.attempts.single.error, contains('HTTP 503'));
+    expect(trace.attempts.single.toJson()['notes'], isNotEmpty);
+  });
+
   test('нет звука → noAudio с действием «Выбрать другое видео»', () async {
     final prep =
         FakePreparer(error: const PrepareException(PrepareErrorKind.noAudio));
