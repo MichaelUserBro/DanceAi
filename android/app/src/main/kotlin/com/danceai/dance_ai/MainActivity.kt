@@ -24,6 +24,10 @@ class MainActivity : FlutterActivity() {
     private var pendingDanceId: String? = null
     private var restored: Map<String, Any?>? = null
 
+    // Сохранение файла («Сохранить JSON» в «Для разработчика»).
+    private var saveResult: MethodChannel.Result? = null
+    private var saveBytes: ByteArray? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         pendingDanceId = savedInstanceState?.getString(KEY_DANCE)
         super.onCreate(savedInstanceState)
@@ -38,6 +42,61 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler(::onCall)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FILES_CHANNEL)
+            .setMethodCallHandler(::onFilesCall)
+    }
+
+    /**
+     * "save": системный диалог «Сохранить как» (ACTION_CREATE_DOCUMENT) —
+     * пользователь выбирает место (например, «Загрузки»), байты пишутся
+     * через ContentResolver. Без разрешений на хранилище и без пакетов.
+     */
+    private fun onFilesCall(call: MethodCall, result: MethodChannel.Result) {
+        if (call.method != "save") {
+            result.notImplemented()
+            return
+        }
+        val name = call.argument<String>("name") ?: "danceai.json"
+        val mime = call.argument<String>("mime") ?: "application/json"
+        val bytes = call.argument<ByteArray>("bytes")
+        if (bytes == null) {
+            result.error("NO_DATA", "Нет данных", null)
+            return
+        }
+        saveResult?.success(false)
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = mime
+            putExtra(Intent.EXTRA_TITLE, name)
+        }
+        try {
+            saveResult = result
+            saveBytes = bytes
+            startActivityForResult(intent, REQUEST_SAVE)
+        } catch (e: Exception) {
+            saveResult = null
+            saveBytes = null
+            result.error("NO_PICKER", "Не удалось открыть сохранение файла", null)
+        }
+    }
+
+    private fun onSaveResult(resultCode: Int, data: Intent?) {
+        val result = saveResult ?: return
+        val bytes = saveBytes
+        saveResult = null
+        saveBytes = null
+        val uri = if (resultCode == Activity.RESULT_OK) data?.data else null
+        if (uri == null || bytes == null) {
+            result.success(false)
+            return
+        }
+        try {
+            contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) }
+                ?: throw IllegalStateException("нет потока")
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("WRITE_FAILED", "Не удалось записать файл", null)
+        }
     }
 
     private fun onCall(call: MethodCall, result: MethodChannel.Result) {
@@ -74,6 +133,10 @@ class MainActivity : FlutterActivity() {
 
     @Deprecated("FlutterActivity — не ComponentActivity, Activity Result API недоступен")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == REQUEST_SAVE) {
+            onSaveResult(resultCode, data)
+            return
+        }
         if (requestCode != REQUEST_PICK) {
             super.onActivityResult(requestCode, resultCode, data)
             return
@@ -117,7 +180,9 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "danceai/video_picker"
+        private const val FILES_CHANNEL = "danceai/files"
         private const val REQUEST_PICK = 4207
+        private const val REQUEST_SAVE = 4208
         private const val KEY_DANCE = "danceai.pick.danceId"
     }
 }

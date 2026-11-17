@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:material_ui/material_ui.dart';
 
 import '../../analysis/adapter_registry.dart';
+import '../../analysis/ai_provider.dart';
+import '../../analysis/cancel_token.dart';
 import '../../app/app_scope.dart';
 import '../../app/routes.dart';
 import '../../data/providers_catalog.dart';
@@ -44,12 +46,13 @@ class SettingsScreen extends StatelessWidget {
           body: ListView(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
             children: [
-              if (!AdapterRegistry.realAdaptersAvailable) ...[
+              if (settings.demoMode ||
+                  !AdapterRegistry.realAdaptersAvailable) ...[
                 StaggeredAppear(
                   index: 0,
                   child: Pill(
-                    label: 'Демо-режим: ИИ пока не подключён — анализ идёт '
-                        'через заглушку',
+                    label: 'Включён демо-режим — анализ идёт без ИИ '
+                        '(выключается в «Для разработчика»)',
                     color: StageColors.spotlight,
                   ),
                 ),
@@ -69,8 +72,8 @@ class SettingsScreen extends StatelessWidget {
                 child: _NavCard(
                   icon: Icons.code_rounded,
                   title: 'Для разработчика',
-                  subtitle: 'Сценарий заглушки, подготовка видео, собранный '
-                      'промпт, анализ музыки',
+                  subtitle: 'Демо-режим, подготовка видео, запросы к ИИ, '
+                      'сохранение JSON',
                   onTap: () => Navigator.of(context)
                       .push(stageRoute(const DeveloperScreen())),
                 ),
@@ -258,7 +261,11 @@ class _ProviderList extends StatelessWidget {
           for (final p in all) ...[
             _Choice(
               title: p.name,
-              subtitle: p.isCustom ? 'Адрес API, модель и ключ — свои' : '',
+              subtitle: p.isCustom
+                  ? 'Адрес API, модель и ключ — свои'
+                  : p.verifiedLive
+                      ? ''
+                      : 'не проверено вживую',
               selected: settings.provider?.id == p.id,
               onTap: () => settings.selectProvider(p.id),
               badge: settings.hasKeyFor(p.id) ? 'ключ есть' : null,
@@ -295,6 +302,11 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
   bool _showKey = false;
   Timer? _saveKeyTimer;
 
+  /// Подсказка о возможностях модели (spec 7.2): null — ничего не знаем.
+  ModelLookup? _lookup;
+  Timer? _lookupTimer;
+  CancelToken? _lookupCancel;
+
   @override
   void initState() {
     super.initState();
@@ -305,11 +317,48 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
         _key.text = k ?? '';
         _keyLoaded = true;
       });
+      _scheduleLookup();
     });
+  }
+
+  /// Узнаём, что принимает модель, через секунду после последней правки.
+  /// Нет сети или API не умеет — молча ничего не показываем.
+  void _scheduleLookup() {
+    _lookupTimer?.cancel();
+    _lookupCancel?.cancel();
+    if (_lookup != null) setState(() => _lookup = null);
+    _lookupTimer = Timer(const Duration(milliseconds: 900), _runLookup);
+  }
+
+  Future<void> _runLookup() async {
+    final p = widget.provider;
+    final s = widget.settings;
+    final model = _model.text.trim();
+    final key = _key.text.trim();
+    final url = s.baseUrlFor(p).trim();
+    if (!mounted || model.isEmpty || key.isEmpty || url.isEmpty) return;
+    final cancel = _lookupCancel = CancelToken();
+    final provider = AdapterRegistry.create(
+      provider: p,
+      model: model,
+      apiKey: key,
+      baseUrl: url,
+      transport: AppScope.of(context).transport,
+    );
+    ModelLookup? r;
+    try {
+      r = await provider.lookupModel(cancel);
+    } catch (_) {
+      r = null;
+    }
+    if (!mounted || cancel.isCancelled) return;
+    setState(() => _lookup = r);
   }
 
   @override
   void dispose() {
+    _lookupTimer?.cancel();
+    _lookupCancel?.cancel();
     if (_saveKeyTimer?.isActive ?? false) {
       _saveKeyTimer!.cancel();
       widget.settings.saveKey(widget.provider.id, _key.text);
@@ -324,6 +373,44 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
     _saveKeyTimer?.cancel();
     _saveKeyTimer = Timer(const Duration(milliseconds: 500),
         () => widget.settings.saveKey(widget.provider.id, value));
+    _scheduleLookup();
+  }
+
+  Widget? _lookupHint(ProviderInfo p, SettingsStore s, bool canVideo) {
+    final l = _lookup;
+    if (l == null) return null;
+    final muted = StageText.body(12.5, color: StageColors.textMuted);
+    if (!l.found) {
+      return Text('Модель не найдена у провайдера — проверьте название.',
+          style: StageText.body(12.5, color: StageColors.partial));
+    }
+    final mods = l.inputModalities;
+    if (mods == null) return Text('Модель найдена.', style: muted);
+    const names = {'image': 'изображения', 'video': 'видео', 'audio': 'звук'};
+    final shown = [for (final m in names.keys) if (mods.contains(m)) names[m]!];
+    final takesVideo = mods.contains('video');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          shown.isEmpty
+              ? 'Модель не принимает изображения — для анализа танца нужна '
+                  'другая модель.'
+              : 'Модель принимает: ${shown.join(', ')}.'
+                  '${takesVideo && !mods.contains('audio') ? ' Звук в видео '
+                      'модель может не слышать — о музыке судит по анализу '
+                      'музыки.' : ''}',
+          style: shown.isEmpty
+              ? StageText.body(12.5, color: StageColors.partial)
+              : muted,
+        ),
+        if (takesVideo && canVideo && !s.videoModeFor(p))
+          TextButton(
+            onPressed: () => s.setVideoMode(p.id, true),
+            child: const Text('Включить «видео со звуком»'),
+          ),
+      ],
+    );
   }
 
   @override
@@ -339,6 +426,14 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(p.name, style: StageText.display(22)),
+          if (!p.verifiedLive) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Pill(
+                  label: 'не проверено вживую', color: StageColors.partial),
+            ),
+          ],
           if (p.freeNoteRu != null) ...[
             const SizedBox(height: 6),
             Text(p.freeNoteRu!,
@@ -359,7 +454,10 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
                 labelText: 'Адрес API',
                 hintText: 'https://…/v1',
               ),
-              onChanged: s.setCustomBaseUrl,
+              onChanged: (v) {
+                s.setCustomBaseUrl(v);
+                _scheduleLookup();
+              },
             ),
             const SizedBox(height: 12),
           ],
@@ -370,8 +468,15 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
               labelText: 'Модель',
               hintText: 'Название модели у провайдера',
             ),
-            onChanged: (v) => s.setModel(p.id, v.trim()),
+            onChanged: (v) {
+              s.setModel(p.id, v.trim());
+              _scheduleLookup();
+            },
           ),
+          if (_lookupHint(p, s, canVideo) case final hint?) ...[
+            const SizedBox(height: 6),
+            hint,
+          ],
           if (p.recommendedModels.isNotEmpty) ...[
             const SizedBox(height: 10),
             Wrap(
@@ -384,6 +489,7 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
                     onPressed: () {
                       _model.text = m;
                       s.setModel(p.id, m);
+                      _scheduleLookup();
                     },
                   ),
               ],

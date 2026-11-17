@@ -102,6 +102,8 @@ void main() {
       videoPicker: picker,
     );
     await services.settings.load();
+    // Без ключа: настоящая подготовка видео и анализ музыки, ИИ — заглушка.
+    await services.settings.setDemoMode(true);
 
     final rows = <String>[];
     for (final file in files) {

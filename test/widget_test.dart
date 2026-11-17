@@ -1,3 +1,9 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:dance_ai/analysis/ai_provider.dart';
+import 'package:dance_ai/analysis/prompt_builder.dart';
+import 'package:dance_ai/platform/file_saver.dart';
 import 'dart:io';
 
 import 'package:dance_ai/analysis/analysis_failure.dart';
@@ -214,6 +220,8 @@ void main() {
     await pumpScreen(tester, services, const DeveloperScreen());
     expect(find.text('Нормальный ответ'), findsOneWidget);
     expect(find.text('Нет сети'), findsOneWidget);
+    await tester.ensureVisible(find.text('Нет сети'));
+    await tester.pump();
     await tester.tap(find.text('Нет сети'));
     await tester.pump();
     expect(services.settings.stubScenario.id, 'network');
@@ -248,6 +256,58 @@ void main() {
     expect(find.textContaining('средний -15,2 дБ'), findsOneWidget);
     expect(find.textContaining('совпал в 94 %'), findsOneWidget);
     expect(find.textContaining('всего 6 с'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('для разработчика: демо-режим, частота видео, запросы к ИИ, '
+      '«Сохранить JSON»', (tester) async {
+    final trace = AnalysisTrace()
+      ..danceId = 'samba'
+      ..providerName = 'Google (Gemini)'
+      ..model = 'gemini-3.8-flash'
+      ..mode = SubmissionMode.video
+      ..videoFps = 2
+      ..startedAt = DateTime(2026, 11, 17, 10)
+      ..totalTime = const Duration(seconds: 41)
+      ..prompt = const BuiltPrompt(system: 'S', user: 'U')
+      ..responses.addAll(['{}', '{}']);
+    trace.prepare
+      ..lightVideoBytes = 6 * 1024 * 1024
+      ..lightVideoCodec = 'h264_mf'
+      ..lightVideoWidth = 480
+      ..lightVideoHeight = 854;
+    trace.attempts
+      ..add(AiAttempt(retry: false)
+        ..sentBytes = 8 * 1024 * 1024
+        ..totalTime = const Duration(seconds: 20)
+        ..usage = const AiUsage(inputTokens: 12000, outputTokens: 3000, thinkingTokens: 900))
+      ..add(AiAttempt(retry: true)..totalTime = const Duration(seconds: 18));
+    services.dev.record(trace);
+    final saver = _MemorySaver();
+    await pumpScreen(tester, services, DeveloperScreen(saver: saver),
+        size: const Size(1300, 2400));
+    expect(find.text('Демо-режим (без ИИ)'), findsOneWidget);
+    expect(find.textContaining('6,0 МБ, 480×854, h264_mf'), findsOneWidget);
+    expect(find.textContaining('модель смотрит 2 кадр/с'), findsOneWidget);
+    expect(find.textContaining('был (первый ответ'), findsOneWidget);
+    expect(find.textContaining('вход 12000, выход 3000, размышление 900'),
+        findsOneWidget);
+
+    await tester.tap(find.text('4 кадр/с'));
+    await tester.pump();
+    expect(services.settings.videoFps, 4);
+    await tester.tap(find.text('Демо-режим (без ИИ)'));
+    await tester.pump();
+    expect(services.settings.demoMode, isTrue);
+
+    await tester.ensureVisible(find.text('Сохранить JSON'));
+    await tester.tap(find.text('Сохранить JSON'));
+    await tester.pump(const Duration(seconds: 1));
+    expect(saver.name, 'danceai_samba_gemini-3.8-flash_20261117-100000.json');
+    final j = jsonDecode(utf8.decode(saver.bytes!)) as Map<String, dynamic>;
+    expect(j['submission']['video_codec'], 'h264_mf');
+    expect(j['attempts'], hasLength(2));
+    expect(find.text('JSON сохранён'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -329,4 +389,19 @@ void main() {
         .probe('x');
     expect(p.readable, isFalse);
   });
+}
+
+class _MemorySaver implements FileSaver {
+  String? name;
+  Uint8List? bytes;
+
+  @override
+  Future<bool> save(
+      {required String name,
+      required Uint8List bytes,
+      String mime = 'application/json'}) async {
+    this.name = name;
+    this.bytes = bytes;
+    return true;
+  }
 }

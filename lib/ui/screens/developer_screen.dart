@@ -1,7 +1,13 @@
+import 'dart:convert';
+
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../analysis/analysis_export.dart';
+import '../../analysis/analysis_pipeline.dart';
 import '../../analysis/music/music_analyzer.dart';
+import '../../platform/file_saver.dart';
+import '../../settings/settings_store.dart';
 import '../../analysis/prompt_builder.dart';
 import '../../analysis/stub_ai_provider.dart';
 import '../../analysis/video_preparer.dart';
@@ -10,10 +16,31 @@ import '../../theme/stage_theme.dart';
 import '../format.dart';
 import '../widgets/common.dart';
 
-/// «Для разработчика» (spec 7.8): сценарий заглушки, собранный промпт,
-/// анализ музыки и ответы ИИ последнего анализа. Ключа здесь нет.
+/// «Для разработчика» (spec 7.8): демо-режим и сценарий заглушки, частота
+/// кадров видеорежима, сведения о последнем анализе (подготовка, запросы
+/// к ИИ, токены, повтор, сырые ответы), «Сохранить JSON». Ключа здесь нет.
 class DeveloperScreen extends StatelessWidget {
-  const DeveloperScreen({super.key});
+  const DeveloperScreen({super.key, this.saver});
+
+  /// Для тестов; по умолчанию — системный диалог сохранения.
+  final FileSaver? saver;
+
+  Future<void> _save(BuildContext context, AnalysisTrace trace) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final data = AppScope.of(context).data;
+    try {
+      final ok = await (saver ?? FileSaver.platform()).save(
+        name: analysisExportFileName(trace),
+        bytes: utf8.encode(analysisExportText(trace, data)),
+      );
+      if (ok) {
+        messenger.showSnackBar(const SnackBar(content: Text('JSON сохранён')));
+      }
+    } catch (_) {
+      messenger.showSnackBar(
+          const SnackBar(content: Text('Не удалось сохранить файл')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,10 +54,44 @@ class DeveloperScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text('Демо-режим (без ИИ)',
+                    style: StageText.body(15.5, weight: 700)),
+                subtitle: Text(
+                  'Анализ через заглушку: без ключа и без расхода лимитов. '
+                  'Подготовка видео — настоящая.',
+                  style: StageText.body(12.5, color: StageColors.textMuted),
+                ),
+                value: settings.demoMode,
+                onChanged: settings.setDemoMode,
+              ),
+              const SizedBox(height: 12),
+              Text('Частота кадров видеорежима', style: StageText.display(20)),
+              const SizedBox(height: 4),
+              Text(
+                'С какой частотой модель смотрит видео целиком — там, где API '
+                'это позволяет (Gemini: videoMetadata.fps). Для проверки, '
+                'влияет ли частота на оценку работы ног.',
+                style: StageText.body(13, color: StageColors.textMuted),
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<double>(
+                segments: [
+                  for (final f in SettingsStore.videoFpsChoices)
+                    ButtonSegment(
+                        value: f, label: Text('${f.round()} кадр/с')),
+                ],
+                selected: {settings.videoFps},
+                onSelectionChanged: (v) => settings.setVideoFps(v.first),
+              ),
+              const SizedBox(height: 18),
               Text('Сценарий заглушки ИИ', style: StageText.display(20)),
               const SizedBox(height: 4),
               Text(
-                'Что вернёт заглушка при следующем анализе',
+                settings.demoMode
+                    ? 'Что вернёт заглушка при следующем анализе'
+                    : 'Действует в демо-режиме',
                 style: StageText.body(13, color: StageColors.textMuted),
               ),
               const SizedBox(height: 8),
@@ -74,13 +135,29 @@ class DeveloperScreen extends StatelessWidget {
                   const SizedBox(height: 16),
                   Text('Запрос к ИИ', style: StageText.body(15.5, weight: 700)),
                   const SizedBox(height: 8),
-                  _kv(
-                    'Способ подачи',
-                    trace.mode == SubmissionMode.video
-                        ? 'видео целиком'
-                        : 'кадры',
-                  ),
+                  _kv('Провайдер', trace.demo
+                      ? 'демо-режим (заглушка)'
+                      : '${trace.providerName}'),
+                  if (!trace.demo) _kv('Модель', '${trace.model}'),
+                  _kv('Способ подачи', _modeText(trace)),
                   _kv('Ответов ИИ', '${trace.responses.length}'),
+                  _kv('Повторный запрос', trace.retried
+                      ? 'был (первый ответ не прошёл проверку)'
+                      : 'нет'),
+                  for (final (i, a) in trace.attempts.indexed)
+                    _kv('Запрос №${i + 1}', _attempt(a)),
+                  if (trace.totalTime != null)
+                    _kv('Всего до отчёта', _secs(trace.totalTime)),
+                  if (trace.failure != null) _kv('Итог', trace.failure!),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: GhostButton(
+                      label: 'Сохранить JSON',
+                      icon: Icons.save_alt_rounded,
+                      onPressed: () => _save(context, trace),
+                    ),
+                  ),
                   const SizedBox(height: 12),
                   _Block(title: 'Системный промпт', text: trace.prompt!.system),
                   _Block(title: 'Запрос', text: trace.prompt!.user),
@@ -118,6 +195,40 @@ class DeveloperScreen extends StatelessWidget {
     );
   }
 
+  static String _modeText(AnalysisTrace t) {
+    if (t.mode != SubmissionMode.video) return 'кадры';
+    final fps = t.videoFps;
+    return fps == null
+        ? 'видео целиком'
+        : 'видео целиком, модель смотрит ${fps.round()} кадр/с';
+  }
+
+  static String _secs(Duration? d) =>
+      d == null
+          ? '—'
+          : '${(d.inMilliseconds / 1000).toStringAsFixed(1).replaceAll('.', ',')} с';
+
+  static String _attempt(AiAttempt a) {
+    final u = a.usage;
+    final tokens = u == null
+        ? null
+        : 'токены: вход ${u.inputTokens ?? '—'}, выход ${u.outputTokens ?? '—'}'
+            '${u.thinkingTokens == null ? '' : ', размышление ${u.thinkingTokens}'}';
+    return [
+      if (a.sentBytes != null) 'отправлено ${_size(a.sentBytes!)}',
+      if (a.sendTime != null) 'отправка ${_secs(a.sendTime)}',
+      'до ответа ${_secs(a.totalTime)}',
+      ?tokens,
+      if (a.finishReason != null) 'завершение ${a.finishReason}',
+      ...a.notes,
+      if (a.error != null) 'ошибка: ${a.error}',
+    ].join(' · ');
+  }
+
+  static String _size(int bytes) => bytes >= 1024 * 1024
+      ? '${(bytes / 1024 / 1024).toStringAsFixed(1).replaceAll('.', ',')} МБ'
+      : '${(bytes / 1024).toStringAsFixed(0)} КБ';
+
   static Widget _kv(String k, String v) => Padding(
     padding: const EdgeInsets.only(bottom: 4),
     child: Text.rich(
@@ -144,6 +255,7 @@ class _PrepareInfo extends StatelessWidget {
   static const _stageNames = {
     PrepareStage.checkingVideo: 'проверка',
     PrepareStage.extractingFrames: 'кадры',
+    PrepareStage.compressingVideo: 'сжатие видео',
     PrepareStage.analyzingMusic: 'звук и музыка',
   };
 
@@ -179,7 +291,14 @@ class _PrepareInfo extends StatelessWidget {
         }),
         if (d.width != null)
           DeveloperScreen._kv('Исходный размер', '${d.width}×${d.height}'),
-        DeveloperScreen._kv('Кадров', frames),
+        if (d.lightVideoBytes != null)
+          DeveloperScreen._kv(
+            'Видео для отправки',
+            '${DeveloperScreen._size(d.lightVideoBytes!)}, '
+                '${d.lightVideoWidth}×${d.lightVideoHeight}, ${d.lightVideoCodec}',
+          )
+        else
+          DeveloperScreen._kv('Кадров', frames),
         DeveloperScreen._kv(
           'Уровень звука',
           d.audioRmsDb == null

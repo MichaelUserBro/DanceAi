@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 
 import 'criteria.dart';
+import 'sha256.dart';
 import 'providers_catalog.dart';
 
 /// Шаблоны промпта из assets/prompts/ и текст схемы отчёта.
@@ -27,6 +28,7 @@ class AppData {
     required this.providers,
     required this.templates,
     required this.reportSchemaText,
+    this.contentHashes = const {},
   }) : reportSchema = jsonDecode(reportSchemaText) as Map<String, dynamic>;
 
   /// Сборка из текстов файлов — общая для приложения и тестов.
@@ -51,6 +53,19 @@ class AppData {
           inputFrames: inputFrames,
         ),
         reportSchemaText: reportSchemaJson,
+        contentHashes: {
+          // Один хеш на всё, что влияет на ответ модели, и по файлам.
+          'prompts_and_criteria': sha256OfText([
+            systemPrompt, userPrompt, inputVideo, inputFrames, criteriaJson,
+            reportSchemaJson,
+          ].join('\u0000')),
+          'analysis_system.md': sha256OfText(systemPrompt),
+          'analysis_user.md': sha256OfText(userPrompt),
+          'input_video.md': sha256OfText(inputVideo),
+          'input_frames.md': sha256OfText(inputFrames),
+          'criteria.json': sha256OfText(criteriaJson),
+          'report.schema.json': sha256OfText(reportSchemaJson),
+        },
       );
 
   static const assetPaths = (
@@ -91,4 +106,8 @@ class AppData {
   final PromptTemplates templates;
   final String reportSchemaText;
   final Map<String, dynamic> reportSchema;
+
+  /// SHA-256 шаблонов промпта, criteria.json и схемы — чтобы на эталонном
+  /// наборе сравнивать результаты разных версий промпта (spec 7.8).
+  final Map<String, String> contentHashes;
 }
