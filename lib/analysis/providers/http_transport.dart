@@ -153,12 +153,26 @@ class IoHttpTransport implements HttpTransport {
       rethrow;
     } catch (e) {
       if (cancel.isCancelled) throw const AnalysisCancelled();
-      // Только тип ошибки и хост — без заголовков и параметров запроса.
-      throw AiException(AiErrorKind.network,
-          '${e is TimeoutException ? 'таймаут' : e.runtimeType} (${call.uri.host})');
+      // Тип и текст ошибки, хост — без заголовков и параметров запроса
+      // (ключ передаётся только в заголовке; query на всякий случай режем).
+      throw AiException(AiErrorKind.network, _describe(e, call.uri));
     } finally {
       unawaited(cancelSub);
       client.close(force: true);
     }
+  }
+
+  static String _describe(Object e, Uri uri) {
+    if (e is TimeoutException) return 'таймаут (${uri.host})';
+    var msg = switch (e) {
+      HttpException(:final message) => message,
+      SocketException(:final message, :final osError) =>
+        '$message${osError == null ? '' : ' (${osError.message})'}',
+      TlsException(:final message) => message,
+      _ => '',
+    };
+    msg = msg.replaceAll(RegExp(r'uri = \S+'), '').trim();
+    if (msg.length > 160) msg = '${msg.substring(0, 160)}…';
+    return '${e.runtimeType}${msg.isEmpty ? '' : ': $msg'} (${uri.host})';
   }
 }

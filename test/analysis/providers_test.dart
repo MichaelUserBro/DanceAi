@@ -412,6 +412,22 @@ void main() {
               .having((e) => e.freeTier, 'freeTier', isTrue)));
     });
 
+    test('422 «content safety screening» (Nvidia через OpenRouter) → blocked',
+        () async {
+      final http = FakeHttp((c, i) => jsonResult(422, {
+            'error': {
+              'message': 'Provider returned error',
+              'code': 422,
+              'metadata': {
+                'raw': '{"error": {"message": "input rejected by content safety screening"}}',
+                'provider_name': 'Nvidia'
+              }
+            }
+          }));
+      await expectLater(analyze(compat(http), req(frames)),
+          throwsA(isA<AiException>().having((e) => e.kind, 'kind', AiErrorKind.blocked)));
+    });
+
     test('429 с Retry-After', () async {
       final http = FakeHttp((c, i) =>
           jsonResult(429, {'error': {'message': 'slow down'}}, {'retry-after': '42'}));
@@ -632,6 +648,18 @@ void main() {
       expect(f.actions.first, FailureAction.sendFrames);
       expect(AnalysisFailure.fromAi(const AiException(AiErrorKind.tooLarge)).kind,
           FailureKind.tooLarge);
+    });
+
+    test('402 в режиме видео (OpenRouter: «нужен баланс для видео») → '
+        '«Отправить кадрами»', () {
+      final f = AnalysisFailure.fromAi(
+          const AiException(AiErrorKind.insufficientFunds),
+          videoMode: true);
+      expect(f.actions.first, FailureAction.sendFrames);
+      expect(f.message, contains('кадрами'));
+      final frames = AnalysisFailure.fromAi(
+          const AiException(AiErrorKind.insufficientFunds));
+      expect(frames.actions, isNot(contains(FailureAction.sendFrames)));
     });
 
     test('реестр: возможности по типу API', () {

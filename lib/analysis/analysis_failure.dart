@@ -32,7 +32,10 @@ enum FailureKind {
 /// Понятная ошибка анализа: русский текст и действия. Ключ в текст не попадает.
 class AnalysisFailure implements Exception {
   const AnalysisFailure(this.kind,
-      {this.details = const [], this.retryAfter, this.freeTier = false});
+      {this.details = const [],
+      this.retryAfter,
+      this.freeTier = false,
+      this.videoMode = false});
 
   factory AnalysisFailure.fromPrepare(PrepareException e) =>
       AnalysisFailure(switch (e.kind) {
@@ -60,6 +63,7 @@ class AnalysisFailure implements Exception {
         details: [?e.detail],
         retryAfter: e.retryAfter,
         freeTier: e.freeTier,
+        videoMode: videoMode,
       );
 
   final FailureKind kind;
@@ -69,6 +73,9 @@ class AnalysisFailure implements Exception {
 
   /// Бесплатная модель с дневным лимитом.
   final bool freeTier;
+
+  /// Материал отправлялся видео целиком (можно предложить кадры).
+  final bool videoMode;
 
   /// Технические подробности для раздела «Для разработчика».
   final List<String> details;
@@ -128,9 +135,12 @@ class AnalysisFailure implements Exception {
           'Провайдер не нашёл модель или модель не принимает изображения '
               '(видео). Проверьте название модели в настройках или выберите '
               'другую.',
-        FailureKind.insufficientFunds =>
-          'На счёте провайдера недостаточно средств. Пополните баланс или '
-              'выберите бесплатную модель.',
+        FailureKind.insufficientFunds => videoMode
+            ? 'Провайдер не принял видео: на счёте недостаточно средств. '
+                'Для видео часть провайдеров требует положительный баланс даже '
+                'на бесплатных моделях. Можно отправить то же видео кадрами.'
+            : 'На счёте провайдера недостаточно средств. Пополните баланс или '
+                'выберите бесплатную модель.',
         FailureKind.blocked =>
           'Провайдер отклонил запрос своими фильтрами. Попробуйте другую '
               'модель или другое видео.',
@@ -169,6 +179,10 @@ class AnalysisFailure implements Exception {
         FailureKind.videoTooLarge || FailureKind.videoEncodeFailed => const [
             FailureAction.sendFrames,
             FailureAction.chooseOtherVideo,
+          ],
+        FailureKind.insufficientFunds when videoMode => const [
+            FailureAction.sendFrames,
+            FailureAction.openSettings,
           ],
         FailureKind.modelUnavailable || FailureKind.insufficientFunds => const [
             FailureAction.openSettings,

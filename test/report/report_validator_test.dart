@@ -125,6 +125,16 @@ void main() {
           isA<ParsedReport>());
     });
 
+    test('посторонний объект перед отчётом (живая проверка gemini-3.8-flash: '
+        'кусок схемы, затем отчёт)', () {
+      final indented = const JsonEncoder.withIndent('  ')
+          .convert(loadExampleReportJson());
+      expect(
+          parseReport('{\n  "scores": {\n    "\$defs": null\n  }\n}\n"$indented',
+              dance: waltz, validator: validator),
+          isA<ParsedReport>());
+    });
+
     test('не JSON', () {
       final r = parseReport('Не могу оценить', dance: waltz, validator: validator);
       expect(r, isA<InvalidReport>());

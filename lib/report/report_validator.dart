@@ -188,6 +188,19 @@ ParseOutcome parseReport(String raw,
         json = null;
       }
     }
+    // Перед отчётом бывает посторонний объект (живая проверка:
+    // gemini-3.8-flash вывел кусок схемы, затем отчёт) — ищем объект,
+    // который начинается с поля отчёта.
+    if (json == null && end > 0) {
+      for (final m in RegExp(r'\{\s*"schema_version"').allMatches(text)) {
+        try {
+          json = jsonDecode(text.substring(m.start, end + 1));
+          break;
+        } on FormatException {
+          json = null;
+        }
+      }
+    }
     if (json == null) {
       return const InvalidReport(
           ['Ответ не является JSON-объектом. Верни только JSON по схеме.'],

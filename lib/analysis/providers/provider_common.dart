@@ -96,8 +96,10 @@ AiException httpError(HttpResult r, {required String? key, bool freeTier = false
     kind = AiErrorKind.tooLarge;
   } else if (r.status == 429) {
     kind = AiErrorKind.rateLimit;
-  } else if (r.status == 403 &&
+  } else if ((r.status == 403 || r.status == 400 || r.status == 422) &&
       has(['moderation', 'flagged', 'content_policy', 'guardrail', 'safety'])) {
+    // Например, Nvidia через OpenRouter: 422 «input rejected by content
+    // safety screening» (в т. ч. при большом числе изображений).
     kind = AiErrorKind.blocked;
   } else if (r.status == 403) {
     kind = AiErrorKind.invalidKey;
