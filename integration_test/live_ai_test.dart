@@ -14,6 +14,7 @@
 // Случай: <provider_id>/<модель>/<frames|video>; модель может содержать «/».
 // Каждый случай × каждое видео = 1–2 запроса (второй — при повторе).
 // OUT_DIR — куда сохранить JSON «Для разработчика» (без ключа).
+// LIVE_MAX_FRAMES — «Максимум кадров» провайдера (пусто — по умолчанию).
 //
 // ignore_for_file: avoid_print
 import 'dart:io';
@@ -38,6 +39,7 @@ const _live = String.fromEnvironment('LIVE');
 const _cases = String.fromEnvironment('LIVE_CASES');
 const _videos = String.fromEnvironment('LIVE_VIDEOS');
 const _outDir = String.fromEnvironment('OUT_DIR');
+const _maxFrames = String.fromEnvironment('LIVE_MAX_FRAMES');
 const _videoDir = String.fromEnvironment('VIDEO_DIR', defaultValue: 'test_videos');
 
 const _envKeys = {
@@ -104,7 +106,7 @@ void main() {
 
     final data = await AppData.load();
     var requests = 0;
-    print('LIVE | провайдер | модель | режим | видео | отправлено | время | '
+    print('LIVE | провайдер | модель | режим | видео | отправлено | кадры | время | '
         'с первого раза | оценки (tech/musicality/partnering/presentation) | '
         'status | итог');
     for (final spec in _cases.split(',')) {
@@ -129,6 +131,7 @@ void main() {
         await settings.setModel(providerId, model);
         await settings.saveKey(providerId, key);
         await settings.setVideoMode(providerId, mode == 'video');
+        await settings.setMaxFrames(providerId, int.tryParse(_maxFrames));
         final services = AppServices(
           data: data,
           settings: settings,
@@ -178,6 +181,7 @@ void main() {
         final sent = t.attempts.isEmpty ? null : t.attempts.first.sentBytes;
         print('LIVE | $providerId | $model | $mode | $name | '
             '${sent == null ? '—' : '${(sent / 1e6).toStringAsFixed(1)} MB'} | '
+            'кадров ${t.frameCount ?? '—'} | '
             '${(sw.elapsedMilliseconds / 1000).toStringAsFixed(0)} s | '
             '${report == null ? '—' : (t.retried ? 'нет (повтор)' : 'да')} | '
             '$scores | $status | ${t.failure ?? 'отчёт'}');

@@ -1,0 +1,12 @@
+# Образец android/key.properties — подпись релизных APK.
+# Скопируйте в android/key.properties (он в .gitignore) и заполните.
+# Сам key.properties и файл .jks в git НЕ кладутся.
+#
+# Пути — с прямыми слэшами (обратный слэш в .properties — экранирование).
+# Если в пароле есть \ — пишите его как \.
+# У keystore формата PKCS12 (по умолчанию у keytool) пароль ключа совпадает
+# с паролем хранилища.
+storeFile=C:/Users/Honor/danceai-signing/danceai-upload.jks
+storePassword=
+keyAlias=upload
+keyPassword=

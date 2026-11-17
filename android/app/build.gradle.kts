@@ -1,7 +1,32 @@
+import java.io.InputStreamReader
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Подпись релиза: android/key.properties (в git не попадает; образец —
+// android/key.properties.example). Без него release-сборка останавливается
+// с понятной ошибкой, а не подписывается debug-ключом. Debug-сборки — как раньше.
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        InputStreamReader(keystorePropertiesFile.inputStream(), Charsets.UTF_8).use { load(it) }
+    }
+}
+val signingKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+
+fun releaseSigningProblem(): String? {
+    if (!keystorePropertiesFile.exists()) {
+        return "нет файла ${keystorePropertiesFile.path} (образец — key.properties.example)"
+    }
+    val missing = signingKeys.filter { keystoreProperties.getProperty(it).isNullOrBlank() }
+    if (missing.isNotEmpty()) return "в key.properties не заполнено: ${missing.joinToString()}"
+    val store = file(keystoreProperties.getProperty("storeFile"))
+    if (!store.exists()) return "файл ключа из storeFile не найден: ${store.path}"
+    return null
 }
 
 android {
@@ -37,11 +62,20 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (releaseSigningProblem() == null) {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }
@@ -54,4 +88,16 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+// Проверка до начала release-сборки (APK и AAB): без ключа — остановка.
+val checkReleaseSigning = tasks.register("checkReleaseSigning") {
+    doFirst {
+        releaseSigningProblem()?.let {
+            throw GradleException("Release-сборка не подписана: $it. См. CLAUDE.md, раздел «Подпись».")
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(checkReleaseSigning)
 }

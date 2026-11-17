@@ -53,6 +53,12 @@ powershell -ExecutionPolicy Bypass -File tool\make_release.ps1   # готовы�
 - Потолок анализа — `analysisTimeLimit` (5 мин) в `analysis_pipeline.dart`; повтор — только если хватает времени.
 - Живые тесты (`integration_test/live_ai_test.dart`) — только по команде автора; ключи из `DANCEAI_GOOGLE_KEY`, `DANCEAI_OPENROUTER_KEY` (переменные пользователя Windows: читать из реестра в процесс теста, не выводить).
 
+## Подпись
+- Релизные APK подписываются release-ключом (alias `upload`). Файл `.jks` хранится **вне репозитория**; путь и пароли — в `android/key.properties` (в `.gitignore`, образец — `android/key.properties.example`). Ключ, пароли и `key.properties` не коммитить, не выводить в логи и переписку; keytool с паролями запускает только автор.
+- Без `key.properties` release-сборка останавливается с ошибкой (`checkReleaseSigning`) — debug-ключом релиз не подписывается. Debug-сборки ключа не требуют.
+- `versionCode` — число после `+` в `version` из `pubspec.yaml`. Перед каждым релизом увеличивать вручную (и `appVersion` в `lib/app/app_version.dart` — тест сверяет): иначе обновление поверх не встанет. `tool\make_release.ps1` сверяет его с прошлым `releases\VERSION.txt`, собирает split-APK без надбавки ABI (`force-version-code-ignoring-abi`), проверяет подпись `apksigner verify --print-certs` и пишет SHA-256 сертификата в `VERSION.txt`. Отпечаток не должен меняться между релизами.
+- Windows-сборка не подписывается (SmartScreen: «Подробнее» → «Выполнить в любом случае»).
+
 ## Правила работы
 - **Новые зависимости** (pub-пакеты, нативные библиотеки, инструменты) — сначала предложить автору: зачем, альтернативы, лицензия, поддержка Android и Windows. Добавлять после согласия.
 - `docs/spec.md`, `assets/criteria.json`, `assets/report.schema.json`, `assets/prompts/` меняются только отдельной задачей. Нашёл ошибку — сообщи автору.
