@@ -86,6 +86,26 @@ class DeveloperScreen extends StatelessWidget {
                 onSelectionChanged: (v) => settings.setVideoFps(v.first),
               ),
               const SizedBox(height: 18),
+              Text('Уровень размышления (Gemini)',
+                  style: StageText.display(20)),
+              const SizedBox(height: 4),
+              Text(
+                'thinkingConfig.thinkingLevel — для сравнения качества на '
+                'эталонном наборе. «Модель» — по умолчанию модели.',
+                style: StageText.body(13, color: StageColors.textMuted),
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<String>(
+                segments: [
+                  const ButtonSegment(value: '', label: Text('Модель')),
+                  for (final l in SettingsStore.thinkingLevels)
+                    ButtonSegment(value: l, label: Text(l)),
+                ],
+                selected: {settings.thinkingLevel ?? ''},
+                onSelectionChanged: (v) => settings
+                    .setThinkingLevel(v.first.isEmpty ? null : v.first),
+              ),
+              const SizedBox(height: 18),
               Text('Сценарий заглушки ИИ', style: StageText.display(20)),
               const SizedBox(height: 4),
               Text(
@@ -140,6 +160,11 @@ class DeveloperScreen extends StatelessWidget {
                       : '${trace.providerName}'),
                   if (!trace.demo) _kv('Модель', '${trace.model}'),
                   _kv('Способ подачи', _modeText(trace)),
+                  if (trace.thinkingLevel != null)
+                    _kv('Уровень размышления', trace.thinkingLevel!),
+                  if (trace.maxFramesSetting != null)
+                    _kv('Максимум кадров (настройка)',
+                        '${trace.maxFramesSetting}'),
                   _kv('Ответов ИИ', '${trace.responses.length}'),
                   _kv('Повторный запрос', trace.retried
                       ? 'был (первый ответ не прошёл проверку)'

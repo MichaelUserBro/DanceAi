@@ -181,6 +181,22 @@ void main() {
             '${(sw.elapsedMilliseconds / 1000).toStringAsFixed(0)} s | '
             '${report == null ? '—' : (t.retried ? 'нет (повтор)' : 'да')} | '
             '$scores | $status | ${t.failure ?? 'отчёт'}');
+        // Время по этапам и токены по каждому запросу.
+        String sec(Duration? d) =>
+            d == null ? '—' : (d.inMilliseconds / 1000).toStringAsFixed(1);
+        final prep = [
+          for (final e in t.prepare.stageTimes.entries)
+            '${e.key.name} ${sec(e.value)}',
+        ].join(', ');
+        final attempts = [
+          for (final a in t.attempts)
+            '${a.retry ? 'повтор' : 'запрос'}: отправка ${sec(a.sendTime)}, '
+                'до ответа ${sec(a.totalTime)}, токены '
+                '${a.usage?.inputTokens ?? '—'}/${a.usage?.outputTokens ?? '—'}'
+                '/${a.usage?.thinkingTokens ?? '—'}'
+                '${a.error == null ? '' : ', ${a.error}'}',
+        ].join('; ');
+        print('LIVE    этапы, с: $prep | $attempts');
         if (_outDir.isNotEmpty) {
           final out = File('$_outDir/${analysisExportFileName(t)}');
           await out.writeAsString(analysisExportText(t, data));

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../analysis/adapter_registry.dart';
@@ -297,6 +298,8 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
       TextEditingController(text: widget.settings.modelFor(widget.provider.id));
   late final _url =
       TextEditingController(text: widget.settings.customBaseUrl);
+  late final _maxFrames = TextEditingController(
+      text: widget.settings.maxFramesFor(widget.provider.id)?.toString() ?? '');
   final _key = TextEditingController();
   bool _keyLoaded = false;
   bool _showKey = false;
@@ -365,6 +368,7 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
     }
     _model.dispose();
     _url.dispose();
+    _maxFrames.dispose();
     _key.dispose();
     super.dispose();
   }
@@ -477,6 +481,27 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
             const SizedBox(height: 6),
             hint,
           ],
+          if (p.modelHintRu != null) ...[
+            const SizedBox(height: 6),
+            Text(p.modelHintRu!,
+                style: StageText.body(12.5, color: StageColors.textMuted)),
+          ],
+          const SizedBox(height: 12),
+          TextField(
+            controller: _maxFrames,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: InputDecoration(
+              labelText: 'Максимум кадров',
+              hintText: 'По умолчанию — '
+                  '${AdapterRegistry.capabilitiesFor(p.apiType).frameOptions.maxFrames}',
+              helperText: 'Если модель отклоняет запрос с большим числом '
+                  'изображений. Пусто — по умолчанию.',
+              helperMaxLines: 2,
+              helperStyle: StageText.body(12, color: StageColors.textMuted),
+            ),
+            onChanged: (v) => s.setMaxFrames(p.id, int.tryParse(v)),
+          ),
           if (p.recommendedModels.isNotEmpty) ...[
             const SizedBox(height: 10),
             Wrap(

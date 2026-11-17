@@ -203,6 +203,116 @@ void main() {
     });
   });
 
+  group('потолок времени и настройки подачи', () {
+    test('ответ не пришёл до потолка → timeLimit «Попробовать ещё раз», '
+        'запрос оборван, папка удалена', () async {
+      final http = FakeHttp((c, i) async {
+        await Future<void>.delayed(const Duration(seconds: 5));
+        return googleOk(valid);
+      });
+      final sw = Stopwatch()..start();
+      await expectLater(
+        AnalysisPipeline(
+          data: data,
+          preparer: preparer(tool()),
+          provider: GoogleProvider(model: 'm', apiKey: _key,
+              baseUrl: 'https://g.test', transport: http),
+          tempStorage: storage,
+          timeLimit: const Duration(milliseconds: 1500),
+        ).run(
+            dance: samba,
+            videoPath: 'v.mp4',
+            wantVideo: false,
+            cancel: CancelToken(),
+            onProgress: (_) {}),
+        throwsA(isA<AnalysisFailure>()
+            .having((f) => f.kind, 'kind', FailureKind.timeLimit)
+            .having((f) => f.retryLabel, 'label', 'Попробовать ещё раз')
+            .having((f) => f.actions.first, 'action', FailureAction.retry)),
+      );
+      expect(sw.elapsed, lessThan(const Duration(seconds: 4)));
+      expect(workDirsLeft(), isFalse);
+    });
+
+    test('невалидный ответ, а до потолка мало времени → повтор не '
+        'запускается, timeLimit', () async {
+      final http = FakeHttp((c, i) => googleOk('не JSON'));
+      final trace = AnalysisTrace();
+      await expectLater(
+        AnalysisPipeline(
+          data: data,
+          preparer: preparer(tool()),
+          provider: GoogleProvider(model: 'm', apiKey: _key,
+              baseUrl: 'https://g.test', transport: http),
+          tempStorage: storage,
+          timeLimit: const Duration(seconds: 30), // < minRetryTime
+        ).run(
+            dance: samba,
+            videoPath: 'v.mp4',
+            wantVideo: false,
+            cancel: CancelToken(),
+            onProgress: (_) {},
+            trace: trace),
+        throwsA(isA<AnalysisFailure>()
+            .having((f) => f.kind, 'kind', FailureKind.timeLimit)),
+      );
+      expect(http.calls, hasLength(1));
+      expect(trace.attempts, hasLength(1));
+    });
+
+    test('«Максимум кадров» и уровень размышления доходят до запроса', () async {
+      final t = tool();
+      final http = FakeHttp((c, i) => googleOk(valid));
+      final trace = AnalysisTrace();
+      await AnalysisPipeline(
+        data: data,
+        preparer: preparer(t),
+        provider: GoogleProvider(model: 'm', apiKey: _key,
+            baseUrl: 'https://g.test', transport: http),
+        tempStorage: storage,
+      ).run(
+          dance: samba,
+          videoPath: 'v.mp4',
+          wantVideo: false,
+          cancel: CancelToken(),
+          onProgress: (_) {},
+          trace: trace,
+          maxFrames: 10,
+          thinkingLevel: 'low');
+      final parts = FakeHttp.body(http.calls.single)['contents'][0]['parts'] as List;
+      expect(parts.where((p) => p is Map && p.containsKey('inlineData')), hasLength(10));
+      expect(FakeHttp.body(http.calls.single)['generationConfig']['thinkingConfig'],
+          {'thinkingLevel': 'LOW'});
+      expect(trace.maxFramesSetting, 10);
+      final j = jsonDecode(analysisExportText(trace, data)) as Map;
+      expect(j['thinking_level'], 'low');
+      expect(j['max_frames_setting'], 10);
+    });
+
+    test('настройки: «Максимум кадров» по провайдеру и уровень размышления '
+        'сохраняются; пусто — по умолчанию', () async {
+      final prefs = MemoryPrefsStore();
+      final s = SettingsStore(catalog: data.providers, prefs: prefs, keys: MemoryKeyStore());
+      await s.load();
+      await s.setMaxFrames('openrouter', 10);
+      await s.setThinkingLevel('high');
+      final again = SettingsStore(catalog: data.providers, prefs: prefs, keys: MemoryKeyStore());
+      await again.load();
+      expect(again.maxFramesFor('openrouter'), 10);
+      expect(again.maxFramesFor('google'), isNull);
+      expect(again.thinkingLevel, 'high');
+      await again.setMaxFrames('openrouter', null);
+      await again.setThinkingLevel(null);
+      expect(again.maxFramesFor('openrouter'), isNull);
+      expect(again.thinkingLevel, isNull);
+    });
+
+    test('подсказка под моделью — из providers.json', () {
+      expect(data.providers.byId('google')!.modelHintRu, contains('gemini-3.6-flash'));
+      expect(data.providers.byId('openrouter')!.modelHintRu, isNull);
+    });
+  });
+
   group('«Сохранить JSON»', () {
     test('содержит версии, подачу, музыку, попытки, отчёт; без ключа и промпта',
         () async {

@@ -22,6 +22,8 @@ Map<String, Object?> analysisExport(AnalysisTrace t, AppData data) {
     'provider': t.providerName,
     'model': t.model,
     'demo': t.demo,
+    'thinking_level': t.thinkingLevel,
+    'max_frames_setting': t.maxFramesSetting,
     'submission': {
       'mode': t.mode?.name,
       'duration_sec': t.durationSec ?? d.durationSec,

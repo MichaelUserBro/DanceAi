@@ -66,12 +66,22 @@ class SettingsStore extends ChangeNotifier {
   StubScenario _scenario = StubScenario.normal;
   bool _demoMode = false;
   double _videoFps = 2;
+  String? _thinkingLevel;
+  final _maxFrames = <String, int>{};
 
   static const _kProvider = 'provider_id';
   static const _kCustomUrl = 'custom_base_url';
   static const _kScenario = 'stub_scenario';
   static const _kDemo = 'demo_mode';
   static const _kVideoFps = 'video_fps';
+  static const _kThinking = 'thinking_level';
+  static String _kMaxFrames(String id) => 'max_frames.$id';
+
+  /// Уровни размышления в «Для разработчика» (null — по умолчанию модели).
+  static const thinkingLevels = ['low', 'medium', 'high'];
+
+  /// Допустимый «Максимум кадров».
+  static const maxFramesRange = (min: 1, max: 600);
 
   /// Частоты для видеорежима в «Для разработчика».
   static const videoFpsChoices = [1.0, 2.0, 4.0];
@@ -85,10 +95,14 @@ class SettingsStore extends ChangeNotifier {
     _demoMode = await _prefs.getBool(_kDemo) ?? false;
     final fps = double.tryParse(await _prefs.getString(_kVideoFps) ?? '');
     _videoFps = videoFpsChoices.contains(fps) ? fps! : 2;
+    final t = await _prefs.getString(_kThinking);
+    _thinkingLevel = thinkingLevels.contains(t) ? t : null;
     for (final p in catalog.all) {
       final model = await _prefs.getString(_kModel(p.id));
       if (model != null) _models[p.id] = model;
       _videoMode[p.id] = await _prefs.getBool(_kVideo(p.id)) ?? false;
+      final mf = int.tryParse(await _prefs.getString(_kMaxFrames(p.id)) ?? '');
+      if (mf != null) _maxFrames[p.id] = mf;
       final key = await keys.read(p.id);
       _hasKey[p.id] = key != null && key.isNotEmpty;
     }
@@ -108,6 +122,12 @@ class SettingsStore extends ChangeNotifier {
 
   /// Частота, с которой модель смотрит видео (где API это позволяет).
   double get videoFps => _videoFps;
+
+  /// Уровень размышления (где API позволяет); null — по умолчанию модели.
+  String? get thinkingLevel => _thinkingLevel;
+
+  /// «Максимум кадров» провайдера; null — по умолчанию адаптера.
+  int? maxFramesFor(String providerId) => _maxFrames[providerId];
 
   /// Адаптер выбранного провайдера умеет передавать видео.
   bool canSendVideo(ProviderInfo p) =>
@@ -169,6 +189,25 @@ class SettingsStore extends ChangeNotifier {
     _videoFps = fps;
     notifyListeners();
     await _prefs.setString(_kVideoFps, '$fps');
+  }
+
+  Future<void> setThinkingLevel(String? level) async {
+    _thinkingLevel = thinkingLevels.contains(level) ? level : null;
+    notifyListeners();
+    await _prefs.setString(_kThinking, _thinkingLevel ?? '');
+  }
+
+  /// Пусто или вне диапазона — по умолчанию адаптера.
+  Future<void> setMaxFrames(String providerId, int? value) async {
+    final r = maxFramesRange;
+    if (value == null || value < r.min || value > r.max) {
+      _maxFrames.remove(providerId);
+    } else {
+      _maxFrames[providerId] = value;
+    }
+    notifyListeners();
+    await _prefs.setString(
+        _kMaxFrames(providerId), _maxFrames[providerId]?.toString() ?? '');
   }
 
   /// Адрес API выбранного провайдера («Свой» — введённый пользователем).

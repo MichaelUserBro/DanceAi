@@ -28,6 +28,7 @@ class ProviderInfo {
     this.hintRu,
     this.isCustom = false,
     this.verifiedLive = true,
+    this.modelHintRu,
   });
 
   factory ProviderInfo.fromJson(Map<String, dynamic> json) => ProviderInfo(
@@ -41,6 +42,7 @@ class ProviderInfo {
         recommendedModels:
             (json['recommended_models'] as List? ?? const []).cast<String>(),
         verifiedLive: json['verified_live'] as bool? ?? true,
+        modelHintRu: json['model_hint_ru'] as String?,
       );
 
   factory ProviderInfo.customFromJson(Map<String, dynamic> json) =>
@@ -73,6 +75,9 @@ class ProviderInfo {
   /// Адаптер проверен на живом API. false — пометка «не проверено вживую»
   /// (поле `verified_live` в providers.json).
   final bool verifiedLive;
+
+  /// Подсказка под полем «Модель» (`model_hint_ru`).
+  final String? modelHintRu;
 }
 
 class ProvidersCatalog {

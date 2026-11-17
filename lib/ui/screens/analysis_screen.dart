@@ -49,6 +49,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
   bool _videoMode = false;
   bool _processingSeen = false;
   double? _fraction;
+  int? _received;
 
   @override
   void didChangeDependencies() {
@@ -99,12 +100,17 @@ class _AnalysisScreenState extends State<AnalysisScreen>
         setState(() => _videoMode = _videoMode &&
             pipeline.provider.capabilities.supportsVideo);
       }
+      final providerId = settings.provider?.id;
       final result = await pipeline.run(
         dance: dance,
         videoPath: path,
         wantVideo: settings.wantVideo,
         forceFrames: widget.forceFrames,
         videoFps: settings.videoFps,
+        thinkingLevel: settings.thinkingLevel,
+        maxFrames: settings.demoMode || providerId == null
+            ? null
+            : settings.maxFramesFor(providerId),
         cancel: _cancel,
         trace: trace,
         onProgress: _onProgress,
@@ -141,6 +147,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
       if (p.stage == AnalysisStage.processing) _processingSeen = true;
       _stage = p.stage;
       _fraction = p.fraction;
+      _received = p.receivedBytes;
       _retry = p.isRetry;
     });
   }
@@ -154,6 +161,15 @@ class _AnalysisScreenState extends State<AnalysisScreen>
         f > 0 &&
         f < 1) {
       return '${_stage.labelRu} ${(f * 100).round()}%';
+    }
+    final got = _received;
+    if (_stage == AnalysisStage.analyzing && got != null && got > 0) {
+      // Потоковая отдача: ИИ уже пишет отчёт.
+      final kb = got / 1024;
+      final shown = kb < 10
+          ? kb.toStringAsFixed(1).replaceAll('.', ',')
+          : '${kb.round()}';
+      return 'ИИ пишет отчёт · $shown КБ';
     }
     return _stage.labelRu;
   }
@@ -218,7 +234,9 @@ class _AnalysisScreenState extends State<AnalysisScreen>
           ),
         ),
         const SizedBox(height: 8),
-        Text('Прошло ${_elapsed.elapsed.inSeconds} с',
+        Text(
+            'Прошло ${_elapsed.elapsed.inSeconds} с · анализ может занять '
+            'до $analysisTimeLimitRu',
             style: StageText.label(12, color: StageColors.textMuted)),
         const SizedBox(height: 18),
         for (var i = 0; i < stages.length; i++)

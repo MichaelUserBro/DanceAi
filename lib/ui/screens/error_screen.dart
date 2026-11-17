@@ -23,7 +23,7 @@ class ErrorScreen extends StatelessWidget {
     Widget action(FailureAction a, bool primary) {
       final (label, icon, onPressed) = switch (a) {
         FailureAction.retry => (
-            'Повторить',
+            failure.retryLabel,
             Icons.refresh_rounded,
             canRetry
                 ? () => Navigator.of(context).pushReplacement(
@@ -152,6 +152,7 @@ class ErrorScreen extends StatelessWidget {
         FailureKind.tooLarge || FailureKind.videoTooLarge =>
           Icons.sd_card_alert_outlined,
         FailureKind.videoEncodeFailed => Icons.movie_filter_outlined,
+        FailureKind.timeLimit => Icons.timer_off_outlined,
         FailureKind.modelUnavailable => Icons.psychology_alt_outlined,
         FailureKind.insufficientFunds => Icons.account_balance_wallet_outlined,
         FailureKind.blocked => Icons.block_rounded,

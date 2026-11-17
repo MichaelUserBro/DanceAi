@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import '../data/app_data.dart';
@@ -10,6 +11,16 @@ import 'cancel_token.dart';
 import 'prompt_builder.dart';
 import 'temp_storage.dart';
 import 'video_preparer.dart';
+
+/// Потолок на весь анализ вместе с повтором (spec 7.7). Меняется здесь.
+const Duration analysisTimeLimit = Duration(minutes: 5);
+
+/// Повтор после невалидного ответа запускается, только если до потолка
+/// остаётся не меньше этого (и не меньше, чем занял первый запрос).
+const Duration minRetryTime = Duration(seconds: 60);
+
+/// «5 минут» — для строк интерфейса.
+String get analysisTimeLimitRu => '${analysisTimeLimit.inMinutes} минут';
 
 /// Этапы экрана анализа (spec 8б.3).
 enum AnalysisStage {
@@ -27,10 +38,14 @@ enum AnalysisStage {
 }
 
 class AnalysisProgress {
-  const AnalysisProgress(this.stage, {this.fraction, this.isRetry = false});
+  const AnalysisProgress(this.stage,
+      {this.fraction, this.isRetry = false, this.receivedBytes});
 
   final AnalysisStage stage;
   final double? fraction;
+
+  /// Получено байт ответа (потоковая отдача) — живой прогресс «Анализ».
+  final int? receivedBytes;
 
   /// Идёт повторный запрос после неудачной проверки ответа.
   final bool isRetry;
@@ -82,6 +97,12 @@ class AnalysisTrace {
 
   /// Частота, с которой модель смотрит видео (если API это позволяет).
   double? videoFps;
+
+  /// Уровень размышления (если API позволяет); null — по умолчанию модели.
+  String? thinkingLevel;
+
+  /// «Максимум кадров» из настроек провайдера; null — по умолчанию адаптера.
+  int? maxFramesSetting;
   DateTime? startedAt;
   Duration? totalTime;
   final List<AiAttempt> attempts = [];
@@ -116,6 +137,7 @@ class AnalysisPipeline {
     required this.provider,
     required this.tempStorage,
     this.demo = false,
+    this.timeLimit = analysisTimeLimit,
   })  : _validator = ReportValidator(data.criteria),
         _prompts = PromptBuilder(data);
 
@@ -126,6 +148,9 @@ class AnalysisPipeline {
 
   /// Анализ идёт через заглушку («Демо-режим»).
   final bool demo;
+
+  /// Потолок на весь анализ (в тестах — короче).
+  final Duration timeLimit;
   final ReportValidator _validator;
   final PromptBuilder _prompts;
 
@@ -141,8 +166,18 @@ class AnalysisPipeline {
     AnalysisTrace? trace,
     bool forceFrames = false,
     double videoFps = 2,
+    String? thinkingLevel,
+    int? maxFrames,
   }) async {
     final caps = provider.capabilities;
+    final frameOptions = maxFrames == null
+        ? caps.frameOptions
+        : FrameOptions(
+            fps: caps.frameOptions.fps,
+            maxFrames: maxFrames,
+            maxLongSidePx: caps.frameOptions.maxLongSidePx,
+          );
+    final thinking = caps.thinkingConfigurable ? thinkingLevel : null;
     final mode = wantVideo && caps.supportsVideo && !forceFrames
         ? SubmissionMode.video
         : SubmissionMode.frames;
@@ -156,7 +191,9 @@ class AnalysisPipeline {
       ..startedAt = DateTime.now()
       ..videoFps = mode == SubmissionMode.video && caps.videoFpsConfigurable
           ? videoFps
-          : null;
+          : null
+      ..thinkingLevel = thinking
+      ..maxFramesSetting = maxFrames;
     Directory? workDir;
     try {
       workDir = await tempStorage.createWorkDir();
@@ -169,7 +206,7 @@ class AnalysisPipeline {
             videoPath: videoPath,
             dance: dance,
             mode: mode,
-            frameOptions: caps.frameOptions,
+            frameOptions: frameOptions,
             workDir: workDir,
             diagnostics: trace?.prepare,
           ),
@@ -217,14 +254,42 @@ class AnalysisPipeline {
         material: material,
         reportSchema: data.reportSchema,
         videoFps: videoFps,
+        thinkingLevel: thinking,
       );
 
+      Duration? firstAttempt;
       for (var attempt = 0; attempt < 2; attempt++) {
         final isRetry = attempt > 0;
+        final remaining = timeLimit - total.elapsed;
+        if (isRetry) {
+          // Повтор — только если на него остаётся разумное время.
+          final need = firstAttempt != null && firstAttempt > minRetryTime
+              ? firstAttempt
+              : minRetryTime;
+          if (remaining < need) {
+            throw AnalysisFailure(FailureKind.timeLimit, details: [
+              'первый ответ не прошёл проверку, на повтор не хватает времени '
+                  '(осталось ${remaining.inSeconds} с)',
+            ]);
+          }
+        }
+        if (remaining <= Duration.zero) {
+          throw const AnalysisFailure(FailureKind.timeLimit,
+              details: ['потолок исчерпан на подготовке']);
+        }
         onProgress(AnalysisProgress(AnalysisStage.sending, isRetry: isRetry));
         final record = AiAttempt(retry: isRetry);
         trace?.attempts.add(record);
         final sw = Stopwatch()..start();
+        // Своя отмена запроса: пользователь или потолок времени.
+        final attemptCancel = CancelToken();
+        var timedOut = false;
+        final userSub =
+            cancel.whenCancelled.then((_) => attemptCancel.cancel());
+        final timer = Timer(remaining, () {
+          timedOut = true;
+          attemptCancel.cancel();
+        });
         final String raw;
         try {
           final response = await provider.analyze(
@@ -238,10 +303,11 @@ class AnalysisPipeline {
                   AiPhase.waiting => AnalysisStage.analyzing,
                 },
                 fraction: p.phase == AiPhase.sending ? p.fraction : null,
+                receivedBytes: p.receivedBytes,
                 isRetry: isRetry,
               ));
             },
-            cancel: cancel,
+            cancel: attemptCancel,
           );
           raw = response.text;
           record
@@ -257,7 +323,20 @@ class AnalysisPipeline {
                 '${e.kind.name}${e.detail == null ? '' : ': ${e.detail}'}';
           throw AnalysisFailure.fromAi(e,
               videoMode: mode == SubmissionMode.video);
+        } on AnalysisCancelled {
+          record.totalTime = sw.elapsed;
+          if (timedOut && !cancel.isCancelled) {
+            record.error = 'timeLimit';
+            throw AnalysisFailure(FailureKind.timeLimit, details: [
+              'ответ не пришёл до потолка ${timeLimit.inSeconds} с',
+            ]);
+          }
+          rethrow;
+        } finally {
+          timer.cancel();
+          unawaited(userSub);
         }
+        firstAttempt ??= sw.elapsed;
         cancel.throwIfCancelled();
         trace?.responses.add(raw);
 

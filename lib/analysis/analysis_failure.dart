@@ -1,4 +1,5 @@
 import 'ai_provider.dart';
+import 'analysis_pipeline.dart' show analysisTimeLimitRu;
 import 'video_preparer.dart';
 
 /// Что пользователь может сделать на экране ошибки (spec 8б.6).
@@ -27,6 +28,9 @@ enum FailureKind {
 
   /// Облегчённую копию сделать не удалось — можно отправить кадрами.
   videoEncodeFailed,
+
+  /// Анализ не уложился в потолок времени (spec 7.7).
+  timeLimit,
 }
 
 /// Понятная ошибка анализа: русский текст и действия. Ключ в текст не попадает.
@@ -96,6 +100,7 @@ class AnalysisFailure implements Exception {
         FailureKind.blocked => 'Запрос отклонён провайдером',
         FailureKind.videoTooLarge => 'Видео слишком большое для модели',
         FailureKind.videoEncodeFailed => 'Не удалось подготовить видео',
+        FailureKind.timeLimit => 'ИИ отвечает слишком долго',
       };
 
   String get message => switch (kind) {
@@ -150,7 +155,15 @@ class AnalysisFailure implements Exception {
         FailureKind.videoEncodeFailed =>
           'Не удалось подготовить видео для отправки целиком. Можно '
               'отправить его кадрами — выбирать заново не нужно.',
+        FailureKind.timeLimit =>
+          'ИИ не успел подготовить отчёт за $analysisTimeLimitRu. '
+              'Попробуйте ещё раз — провайдер мог быть перегружен — или '
+              'выберите в настройках более быструю модель.',
       };
+
+  /// «Попробовать ещё раз» после потолка времени, иначе «Повторить».
+  String get retryLabel =>
+      kind == FailureKind.timeLimit ? 'Попробовать ещё раз' : 'Повторить';
 
   static String _wait(Duration d) {
     final s = d.inSeconds;
@@ -179,6 +192,10 @@ class AnalysisFailure implements Exception {
         FailureKind.videoTooLarge || FailureKind.videoEncodeFailed => const [
             FailureAction.sendFrames,
             FailureAction.chooseOtherVideo,
+          ],
+        FailureKind.timeLimit => const [
+            FailureAction.retry,
+            FailureAction.openSettings,
           ],
         FailureKind.insufficientFunds when videoMode => const [
             FailureAction.sendFrames,

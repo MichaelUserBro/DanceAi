@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
+
+import '../../analysis/analysis_pipeline.dart' show analysisTimeLimitRu;
 import 'package:video_player/video_player.dart';
 
 import '../../app/app_scope.dart';
@@ -246,7 +248,8 @@ class _VideoScreenState extends State<VideoScreen> {
           color: StageColors.textSecondary,
           text: 'Видео отправляется выбранному ИИ-провайдеру. На бесплатных '
               'тарифах провайдер может использовать данные. В приложении '
-              'видео не сохраняется.',
+              'видео не сохраняется. Анализ может занять до '
+              '$analysisTimeLimitRu.',
         ),
         const SizedBox(height: 20),
         PrimaryButton(
