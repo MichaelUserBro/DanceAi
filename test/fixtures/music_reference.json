@@ -1,10 +1,10 @@
 {
-  "_comment": "Эталон темпа для локальных видео в test_videos/ (не в репозитории). librosa 1.0.1: beat_track (hop 128, start_bpm по танцу, tightness 400) по окнам 20 с, медиана. Только числа — аудио в репозиторий не кладётся.",
+  "_comment": "Эталон темпа для локальных видео в test_videos/ (не в репозитории). librosa 1.0.1: beat_track (hop 128, start_bpm по танцу, tightness 400) по окнам 20 с, медиана. Снят 2026-11-17 на текущем наборе (*_1.mp4); size_bytes — чтобы не сравнивать с другим файлом под тем же именем. Только числа — аудио в репозиторий не кладётся.",
   "tolerance_bpm": 3,
   "videos": {
-    "cha-cha-cha_1.mp4": { "dance_id": "cha_cha", "librosa_bpm": 123.2 },
-    "quickstep_1.MOV": { "dance_id": "quickstep", "librosa_bpm": 201.7 },
-    "samba_1.mp4": { "dance_id": "samba", "librosa_bpm": 100.1 },
-    "slow_waltz_1.MOV": { "dance_id": "slow_waltz", "librosa_bpm": 85.3 }
+    "cha-cha-cha_1.mp4": { "dance_id": "cha_cha", "librosa_bpm": 124.0, "size_bytes": 34573483 },
+    "quickstep_1.mp4": { "dance_id": "quickstep", "librosa_bpm": 203.9, "size_bytes": 13569655 },
+    "samba_1.mp4": { "dance_id": "samba", "librosa_bpm": 104.2, "size_bytes": 30814222 },
+    "slow_waltz_1.mp4": { "dance_id": "slow_waltz", "librosa_bpm": 90.0, "size_bytes": 32115309 }
   }
 }

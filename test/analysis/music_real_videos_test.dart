@@ -30,11 +30,14 @@ void main() {
 
   for (final MapEntry(key: file, value: v) in videos.entries) {
     final path = 'test_videos/$file';
+    final size = v['size_bytes'] as int?;
     final skip = !File(path).existsSync()
         ? 'нет $path'
-        : !ffmpeg
-            ? 'нет ffmpeg в PATH'
-            : null;
+        : size != null && File(path).lengthSync() != size
+            ? '$path — другой файл, эталон снят не на нём'
+            : !ffmpeg
+                ? 'нет ffmpeg в PATH'
+                : null;
     test('$file: темп в пределах ±$tolerance BPM от librosa', () async {
       final out = await Process.run(
         'ffmpeg',
