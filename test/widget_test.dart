@@ -281,7 +281,8 @@ void main() {
         ..sentBytes = 8 * 1024 * 1024
         ..totalTime = const Duration(seconds: 20)
         ..usage = const AiUsage(inputTokens: 12000, outputTokens: 3000, thinkingTokens: 900))
-      ..add(AiAttempt(retry: true)..totalTime = const Duration(seconds: 18));
+      ..add(AiAttempt(retry: true, reason: AttemptReason.invalidResponse)
+        ..totalTime = const Duration(seconds: 18));
     services.dev.record(trace);
     final saver = _MemorySaver();
     await pumpScreen(tester, services, DeveloperScreen(saver: saver),

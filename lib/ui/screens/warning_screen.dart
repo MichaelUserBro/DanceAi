@@ -16,11 +16,15 @@ class WarningScreen extends StatelessWidget {
     required this.report,
     required this.dance,
     required this.session,
+    this.fallbackModel,
   });
 
   final DanceReport report;
   final Dance dance;
   final VideoSession session;
+
+  /// Отчёт подготовила запасная модель.
+  final String? fallbackModel;
 
   @override
   Widget build(BuildContext context) {
@@ -115,7 +119,10 @@ class WarningScreen extends StatelessWidget {
                   icon: Icons.visibility_outlined,
                   onPressed: () => Navigator.of(context).pushReplacement(
                     stageRoute(ReportScreen(
-                        report: report, dance: dance, session: session)),
+                        report: report,
+                        dance: dance,
+                        session: session,
+                        fallbackModel: fallbackModel)),
                   ),
                 ),
               ],

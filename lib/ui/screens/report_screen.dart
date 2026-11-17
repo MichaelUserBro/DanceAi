@@ -18,11 +18,15 @@ class ReportScreen extends StatefulWidget {
     required this.report,
     required this.dance,
     required this.session,
+    this.fallbackModel,
   });
 
   final DanceReport report;
   final Dance dance;
   final VideoSession session;
+
+  /// Отчёт подготовила запасная модель (основная была перегружена).
+  final String? fallbackModel;
 
   @override
   State<ReportScreen> createState() => _ReportScreenState();
@@ -43,6 +47,10 @@ class _ReportScreenState extends State<ReportScreen> {
     final left = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (widget.fallbackModel != null) ...[
+          FallbackNote(model: widget.fallbackModel!),
+          const SizedBox(height: 12),
+        ],
         StaggeredAppear(
           index: 0,
           child: _ScoreHero(
@@ -755,4 +763,34 @@ class _CriterionRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Спокойная строка: отчёт подготовила запасная модель (spec 8б.4).
+class FallbackNote extends StatelessWidget {
+  const FallbackNote({super.key, required this.model});
+
+  final String model;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: StageColors.surfaceHigh,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.swap_horiz_rounded,
+                size: 18, color: StageColors.textMuted),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Отчёт подготовила запасная модель $model '
+                '(основная была перегружена)',
+                style: StageText.body(13, color: StageColors.textMuted),
+              ),
+            ),
+          ],
+        ),
+      );
 }

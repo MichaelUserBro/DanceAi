@@ -33,6 +33,14 @@
       ],
       "free_note_ru": "Есть бесплатный уровень с лимитами; на нём данные могут использоваться Google.",
       "model_hint_ru": "Проверена модель gemini-3.6-flash. У gemini-3.8-flash на бесплатном тарифе очень маленький лимит запросов.",
+      "overload_hint_ru": "квота Google обновляется в {{pacific_midnight_msk}} МСК",
+      "fallback_models": [
+        { "id": "gemini-3.8-flash", "modes": ["frames", "video"] },
+        { "id": "gemini-4-hydrogen", "modes": ["frames", "video"] },
+        { "id": "gemini-3.6-flash", "modes": ["frames", "video"] },
+        { "id": "gemini-3-flash-preview", "modes": ["frames", "video"] },
+        { "id": "gemini-3.5-flash-lite", "modes": ["frames", "video"] }
+      ],
       "recommended_models": []
     },
     {

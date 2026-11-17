@@ -11,18 +11,26 @@ import 'provider_common.dart';
 /// JSON-режим и лимит ответа (не все модели/серверы их принимают).
 class CallOptions {
   const CallOptions(
-      {this.jsonMode = true, this.limitTokens = true, this.useSchema = true});
+      {this.jsonMode = true,
+      this.limitTokens = true,
+      this.useSchema = true,
+      this.useThinking = true});
   final bool jsonMode;
   final bool limitTokens;
 
   /// Строгая схема ответа (где адаптер её передаёт).
   final bool useSchema;
 
-  CallOptions copyWith({bool? jsonMode, bool? limitTokens, bool? useSchema}) =>
+  /// Уровень «размышления» (если задан в запросе и адаптер его передаёт).
+  final bool useThinking;
+
+  CallOptions copyWith(
+          {bool? jsonMode, bool? limitTokens, bool? useSchema, bool? useThinking}) =>
       CallOptions(
         jsonMode: jsonMode ?? this.jsonMode,
         limitTokens: limitTokens ?? this.limitTokens,
         useSchema: useSchema ?? this.useSchema,
+        useThinking: useThinking ?? this.useThinking,
       );
 }
 
@@ -58,18 +66,22 @@ abstract class HttpAiProvider implements AiProvider {
   /// Адаптер передаёт строгую схему ответа ([CallOptions.useSchema]).
   bool get usesSchema => false;
 
-  /// Модели, отклонившие строгую схему, — до конца сеанса приложения,
-  /// чтобы не тратить лишний запрос на каждый анализ.
-  static final _schemaRejected = <String>{};
+  /// Параметры, которые модель отклонила (строгая схема, уровень
+  /// размышления), — по каждой модели, до конца сеанса приложения, чтобы не
+  /// тратить лишний запрос на каждый анализ.
+  static final _rejected = <String>{};
 
-  String get _schemaMemoryKey => '$runtimeType|$baseUrl|$model';
+  String _memoryKey(String param) => '$param|$runtimeType|$baseUrl|$model';
 
   /// Схема для этой модели уже отклонялась в этом сеансе.
-  bool get schemaRejectedThisSession =>
-      _schemaRejected.contains(_schemaMemoryKey);
+  bool get schemaRejectedThisSession => _rejected.contains(_memoryKey('schema'));
+
+  /// Уровень размышления для этой модели уже отклонялся в этом сеансе.
+  bool get thinkingRejectedThisSession =>
+      _rejected.contains(_memoryKey('thinking'));
 
   @visibleForTesting
-  static void resetSchemaMemory() => _schemaRejected.clear();
+  static void resetSchemaMemory() => _rejected.clear();
 
   /// Бесплатная модель с дневным лимитом (подсказка в ошибке 429).
   bool get freeTier => false;
@@ -101,6 +113,8 @@ abstract class HttpAiProvider implements AiProvider {
     final notes = <String>[];
     Object? media;
     var cleaned = false;
+    int? sentBytes;
+    HttpDiag? diag;
     try {
       onProgress(const AiProgress(AiPhase.sending, 0));
       media = await prepareMedia(request, onProgress, cancel, notes);
@@ -110,9 +124,18 @@ abstract class HttpAiProvider implements AiProvider {
             'в этом сеансе');
         options = options.copyWith(useSchema: false);
       }
-      for (var attempt = 0; attempt < 4; attempt++) {
+      final thinking = request.thinkingLevel != null;
+      if (thinking && thinkingRejectedThisSession) {
+        notes.add('уровень размышления не отправлялся: модель отклонила его '
+            'ранее в этом сеансе');
+        options = options.copyWith(useThinking: false);
+      }
+      for (var attempt = 0; attempt < 5; attempt++) {
         cancel.throwIfCancelled();
         final call = await buildCall(request, media, options);
+        // Размер известен до отправки — попадёт и в ошибку.
+        sentBytes = call.body.length + uploadedBytes(media);
+        diag = null;
         onProgress(const AiProgress(AiPhase.sending, 0));
         final r = await transport.send(
           call,
@@ -123,13 +146,27 @@ abstract class HttpAiProvider implements AiProvider {
           onReceive: (n) => onProgress(AiProgress(AiPhase.waiting, null, n)),
         );
         cancel.throwIfCancelled();
+        diag = HttpDiag(
+            status: r.status,
+            headersTime: r.headersTime,
+            firstByteTime: r.firstByteTime);
         if (!r.ok) {
+          diag = diag.withSource(AiErrorSource.http);
+          if (options.useThinking && thinking && isThinkingRejected(r)) {
+            notes.add(redact(
+                'уровень размышления не принят (${errorMessage(r)}) — повтор '
+                'без него',
+                key));
+            options = options.copyWith(useThinking: false);
+            _rejected.add(_memoryKey('thinking'));
+            continue;
+          }
           if (options.useSchema && usesSchema && isSchemaRejected(r)) {
             notes.add(redact(
                 'схема ответа не принята (${errorMessage(r)}) — повтор без неё',
                 key));
             options = options.copyWith(useSchema: false);
-            _schemaRejected.add(_schemaMemoryKey);
+            _rejected.add(_memoryKey('schema'));
             continue;
           }
           if (options.jsonMode && isJsonModeRejected(r)) {
@@ -144,8 +181,22 @@ abstract class HttpAiProvider implements AiProvider {
           }
           throw httpError(r, key: key, freeTier: freeTier);
         }
-        return parse(r,
-            sentBytes: call.body.length + uploadedBytes(media), notes: notes);
+        final AiResponse parsed;
+        try {
+          parsed = parse(r, sentBytes: sentBytes, notes: notes);
+        } on AiException {
+          // Ошибка пришла в теле ответа 200 (событие потока SSE и т. п.).
+          diag = diag.withSource(AiErrorSource.sse);
+          rethrow;
+        }
+        return AiResponse(
+          text: parsed.text,
+          usage: parsed.usage,
+          finishReason: parsed.finishReason,
+          sentBytes: parsed.sentBytes,
+          notes: parsed.notes,
+          diag: diag,
+        );
       }
       throw const AiException(AiErrorKind.server, 'запрос не принят');
     } on AiException catch (e) {
@@ -154,9 +205,12 @@ abstract class HttpAiProvider implements AiProvider {
       await cleanup(media, notes);
       // Последняя страховка: ключ не должен попасть в подробности и заметки.
       final d = e.detail;
-      throw AiException(e.kind, d == null ? null : redact(d, key), e.retryAfter,
-              e.freeTier)
-          .withNotes([for (final n in [...e.notes, ...notes]) redact(n, key)]);
+      throw e.withInfo(
+        detail: d == null ? null : redact(d, key),
+        notes: [for (final n in [...e.notes, ...notes]) redact(n, key)],
+        sentBytes: sentBytes,
+        diag: diag,
+      );
     } finally {
       if (!cleaned) await cleanup(media, notes);
     }

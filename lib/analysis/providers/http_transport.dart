@@ -16,6 +16,7 @@ class HttpCall {
     Uint8List? body,
     this.bodyFile,
     this.responseTimeout = const Duration(minutes: 10),
+    this.stopOnSseError = false,
   }) : body = body ?? Uint8List(0);
 
   factory HttpCall.json(
@@ -24,6 +25,7 @@ class HttpCall {
     Object? json, {
     Map<String, String> headers = const {},
     Duration responseTimeout = const Duration(minutes: 10),
+    bool stopOnSseError = false,
   }) =>
       HttpCall(
         method: method,
@@ -31,6 +33,7 @@ class HttpCall {
         headers: {'content-type': 'application/json', ...headers},
         body: json == null ? null : utf8.encode(jsonEncode(json)),
         responseTimeout: responseTimeout,
+        stopOnSseError: stopOnSseError,
       );
 
   final String method;
@@ -44,10 +47,19 @@ class HttpCall {
   /// Сколько ждать ответа после отправки (модели с «размышлением» отвечают
   /// минутами, но не бесконечно).
   final Duration responseTimeout;
+
+  /// Ответ — поток SSE: на первом событии `data: {"error": …}` чтение
+  /// прекращается (сервер может держать соединение открытым после ошибки).
+  final bool stopOnSseError;
 }
 
 class HttpResult {
-  const HttpResult(this.status, this.headers, this.body);
+  const HttpResult(this.status, this.headers, this.body,
+      {this.headersTime, this.firstByteTime});
+
+  /// Когда пришли заголовки и первый байт тела (от начала запроса).
+  final Duration? headersTime;
+  final Duration? firstByteTime;
 
   final int status;
 
@@ -102,6 +114,7 @@ class IoHttpTransport implements HttpTransport {
     void Function(int receivedBytes)? onReceive,
   }) async {
     cancel.throwIfCancelled();
+    final clock = Stopwatch()..start();
     final client = HttpClient()
       ..connectionTimeout = connectTimeout
       ..idleTimeout = const Duration(seconds: 15);
@@ -143,19 +156,48 @@ class IoHttpTransport implements HttpTransport {
       onUpload?.call(1);
 
       final response = await request.close().timeout(call.responseTimeout);
+      final headersTime = clock.elapsed;
+      Duration? firstByteTime;
+      final ok = response.statusCode >= 200 && response.statusCode < 300;
+      final watchSse = call.stopOnSseError && ok;
+      final sse = _SseErrorWatch();
       // Тело читается по мере прихода: при потоковой отдаче — живой
-      // прогресс «получено N байт».
-      final bytes = await response.fold<BytesBuilder>(
-          BytesBuilder(copy: false), (b, d) {
-        b.add(d);
-        onReceive?.call(b.length);
-        return b;
-      }).timeout(call.responseTimeout);
+      // прогресс «получено N байт». Ошибка HTTP — тело короткое, читаем как
+      // есть; ошибка внутри потока — обрываем чтение на ней.
+      final b = BytesBuilder(copy: false);
+      final done = Completer<void>();
+      late final StreamSubscription<List<int>> sub;
+      sub = response.listen(
+        (d) {
+          firstByteTime ??= clock.elapsed;
+          b.add(d);
+          onReceive?.call(b.length);
+          if (watchSse && !done.isCompleted && sse.add(d)) {
+            // Не ждём отписки: dart:io ждёт закрытия соединения, а сервер
+            // может держать его открытым. Соединение рвёт finally.
+            unawaited(sub.cancel());
+            done.complete();
+          }
+        },
+        onError: (Object e, StackTrace s) {
+          if (!done.isCompleted) done.completeError(e, s);
+        },
+        onDone: () {
+          if (!done.isCompleted) done.complete();
+        },
+        cancelOnError: true,
+      );
+      try {
+        await done.future.timeout(call.responseTimeout);
+      } finally {
+        if (!done.isCompleted) unawaited(sub.cancel());
+      }
       final headers = <String, String>{};
       response.headers.forEach((name, values) {
         headers[name.toLowerCase()] = values.join(', ');
       });
-      return HttpResult(response.statusCode, headers, bytes.takeBytes());
+      return HttpResult(response.statusCode, headers, b.takeBytes(),
+          headersTime: headersTime, firstByteTime: firstByteTime);
     } on AnalysisCancelled {
       rethrow;
     } catch (e) {
@@ -181,5 +223,33 @@ class IoHttpTransport implements HttpTransport {
     msg = msg.replaceAll(RegExp(r'uri = \S+'), '').trim();
     if (msg.length > 160) msg = '${msg.substring(0, 160)}…';
     return '${e.runtimeType}${msg.isEmpty ? '' : ': $msg'} (${uri.host})';
+  }
+}
+
+/// Следит за потоком SSE: true, когда пришло полное событие
+/// `data: {"error": …}`.
+class _SseErrorWatch {
+  final _decoder = const Utf8Decoder(allowMalformed: true);
+  final _pending = StringBuffer();
+
+  bool add(List<int> bytes) {
+    _pending.write(_decoder.convert(bytes));
+    final text = _pending.toString();
+    final lastNl = text.lastIndexOf('\n');
+    if (lastNl < 0) return false;
+    final complete = text.substring(0, lastNl);
+    _pending
+      ..clear()
+      ..write(text.substring(lastNl + 1));
+    for (final line in const LineSplitter().convert(complete)) {
+      if (!line.startsWith('data:') || !line.contains('"error"')) continue;
+      try {
+        final j = jsonDecode(line.substring(5).trim());
+        if (j is Map && j['error'] != null) return true;
+      } on FormatException {
+        // Не JSON — не событие ошибки.
+      }
+    }
+    return false;
   }
 }

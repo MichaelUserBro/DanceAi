@@ -247,7 +247,7 @@ void main() {
       final http = FakeHttp((c, i) => textResult(200,
           'data: ${jsonEncode({'error': {'code': 503, 'message': 'high demand', 'status': 'UNAVAILABLE'}})}\n\n'));
       await expectLater(analyze(google(http), req(frames)),
-          throwsA(isA<AiException>().having((e) => e.kind, 'kind', AiErrorKind.server)));
+          throwsA(isA<AiException>().having((e) => e.kind, 'kind', AiErrorKind.overloaded)));
     });
 
     test('схема не принята (400 про схему) → один повтор без схемы', () async {
@@ -283,7 +283,7 @@ void main() {
       await expectLater(
           analyze(google(http), req(frames)),
           throwsA(isA<AiException>()
-              .having((e) => e.kind, 'kind', AiErrorKind.server)
+              .having((e) => e.kind, 'kind', AiErrorKind.overloaded)
               .having((e) => e.notes.single, 'notes',
                   allOf(contains('схема ответа не принята'),
                       isNot(contains(_key))))));
@@ -312,6 +312,83 @@ void main() {
       expect(g.containsKey('responseJsonSchema'), isFalse);
       expect(g['responseMimeType'], 'application/json');
       expect(r.notes.single, contains('отклонила её ранее'));
+    });
+
+    test('503 HTTP-статусом → overloaded; статус, источник и размер в ошибке',
+        () async {
+      final http = FakeHttp((c, i) => jsonResult(503, {
+            'error': {'code': 503, 'message': 'high demand', 'status': 'UNAVAILABLE'}
+          }));
+      try {
+        await analyze(google(http), req(frames));
+        fail('нет ошибки');
+      } on AiException catch (e) {
+        expect(e.kind, AiErrorKind.overloaded);
+        expect(e.diag!.status, 503);
+        expect(e.diag!.errorSource, AiErrorSource.http);
+        expect(e.sentBytes, http.calls.single.body.length);
+        expect(e.sentBytes, greaterThan(0));
+      }
+    });
+
+    test('503 внутри потока SSE (HTTP 200) → overloaded, источник sse', () async {
+      final http = FakeHttp((c, i) => textResult(200,
+          'data: ${jsonEncode({'error': {'code': 503, 'message': 'high demand', 'status': 'UNAVAILABLE'}})}\n\n'));
+      try {
+        await analyze(google(http), req(frames));
+        fail('нет ошибки');
+      } on AiException catch (e) {
+        expect(e.kind, AiErrorKind.overloaded);
+        expect(e.diag!.status, 200);
+        expect(e.diag!.errorSource, AiErrorSource.sse);
+        expect(e.sentBytes, greaterThan(0));
+      }
+      // Запрос Google просит транспорт оборвать поток на событии ошибки.
+      expect(http.calls.single.stopOnSseError, isTrue);
+    });
+
+    test('успешный ответ несёт статус и время ответа', () async {
+      final http = FakeHttp((c, i) => googleOk(_report));
+      final r = await analyze(google(http), req(frames));
+      expect(r.diag!.status, 200);
+      expect(r.diag!.errorSource, isNull);
+    });
+
+    test('уровень размышления не принят (400) → повтор без него, запомнено '
+        'для модели', () async {
+      final rejected = jsonResult(400, {
+        'error': {
+          'code': 400,
+          'message': 'thinking_level is not supported for this model',
+          'status': 'INVALID_ARGUMENT'
+        }
+      });
+      final http1 = FakeHttp((c, i) => i == 0 ? rejected : googleOk(_report));
+      final r1 = await analyze(google(http1), req(frames, thinking: 'high'));
+      expect(http1.calls, hasLength(2));
+      final g2 = FakeHttp.body(http1.calls[1])['generationConfig'] as Map;
+      expect(g2.containsKey('thinkingConfig'), isFalse);
+      expect(r1.notes.join(' '), contains('уровень размышления не принят'));
+
+      // Та же модель — сразу без параметра.
+      final http2 = FakeHttp((c, i) => googleOk(_report));
+      final r2 = await analyze(google(http2), req(frames, thinking: 'high'));
+      expect(http2.calls, hasLength(1));
+      expect((FakeHttp.body(http2.calls.single)['generationConfig'] as Map)
+          .containsKey('thinkingConfig'), isFalse);
+      expect(r2.notes.single, contains('отклонила его ранее'));
+
+      // Другая модель — параметр отправляется.
+      final http3 = FakeHttp((c, i) => googleOk(_report));
+      await analyze(
+          GoogleProvider(
+              model: 'gemini-other',
+              apiKey: _key,
+              baseUrl: 'https://g.test',
+              transport: http3),
+          req(frames, thinking: 'high'));
+      expect(FakeHttp.body(http3.calls.single)['generationConfig']['thinkingConfig'],
+          {'thinkingLevel': 'HIGH'});
     });
 
     test('уровень размышления → thinkingConfig.thinkingLevel', () async {
@@ -400,7 +477,7 @@ void main() {
         await expectLater(
             analyze(google(http, inlineMax: 10), req(video)),
             throwsA(isA<AiException>()
-                .having((e) => e.kind, 'kind', AiErrorKind.server)
+                .having((e) => e.kind, 'kind', AiErrorKind.overloaded)
                 .having((e) => e.notes.join(' '), 'notes',
                     allOf(contains('загружено через File API'), contains('удалён')))));
         expect(http.calls.last.method, 'DELETE');
@@ -635,9 +712,9 @@ void main() {
       expect(AdapterRegistry.capabilitiesFor(ApiType.anthropic).supportsVideo, isFalse);
     });
 
-    test('529 overloaded → server; 413 → tooLarge', () async {
+    test('529 overloaded → overloaded; 413 → tooLarge', () async {
       for (final (status, kind) in [
-        (529, AiErrorKind.server),
+        (529, AiErrorKind.overloaded),
         (413, AiErrorKind.tooLarge),
       ]) {
         final http = FakeHttp((c, i) => jsonResult(status, {
@@ -698,8 +775,9 @@ void main() {
       404: AiErrorKind.modelUnavailable,
       413: AiErrorKind.tooLarge,
       429: AiErrorKind.rateLimit,
-      500: AiErrorKind.server,
-      503: AiErrorKind.server,
+      500: AiErrorKind.overloaded,
+      503: AiErrorKind.overloaded,
+      400: AiErrorKind.server,
     };
     for (final name in ['google', 'openai_compatible', 'anthropic', 'openai']) {
       test('$name: HTTP-ошибки → вид ошибки; ключ не попадает в тексты, даже '
@@ -863,6 +941,35 @@ void main() {
     cancel.cancel();
     await expectLater(f, throwsA(isA<AnalysisCancelled>()));
     expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
+  });
+
+  test('IoHttpTransport: ошибка в потоке SSE — чтение обрывается сразу, '
+      'даже если сервер держит соединение', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((r) async {
+      await r.drain<void>();
+      r.response
+        ..statusCode = 200
+        ..bufferOutput = false
+        ..headers.contentType = ContentType('text', 'event-stream')
+        ..write('data: {"candidates": []}\n\n')
+        ..write('data: {"error": {"code": 503, "status": "UNAVAILABLE"}}\n\n');
+      await r.response.flush();
+      // Соединение не закрываем.
+    });
+    final sw = Stopwatch()..start();
+    final r = await IoHttpTransport().send(
+        HttpCall.json('POST', Uri.parse('http://127.0.0.1:${server.port}/x'),
+            {'a': 1},
+            stopOnSseError: true),
+        cancel: CancelToken());
+    expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
+    expect(r.status, 200);
+    expect(r.text, contains('"error"'));
+    expect(r.headersTime, isNotNull);
+    expect(r.firstByteTime, isNotNull);
+    expect(r.firstByteTime!, greaterThanOrEqualTo(r.headersTime!));
   });
 
   test('IoHttpTransport: ответ, статус, заголовки, процент отправки', () async {

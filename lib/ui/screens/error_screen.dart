@@ -153,6 +153,7 @@ class ErrorScreen extends StatelessWidget {
           Icons.sd_card_alert_outlined,
         FailureKind.videoEncodeFailed => Icons.movie_filter_outlined,
         FailureKind.timeLimit => Icons.timer_off_outlined,
+        FailureKind.overloaded => Icons.cloud_off_rounded,
         FailureKind.modelUnavailable => Icons.psychology_alt_outlined,
         FailureKind.insufficientFunds => Icons.account_balance_wallet_outlined,
         FailureKind.blocked => Icons.block_rounded,

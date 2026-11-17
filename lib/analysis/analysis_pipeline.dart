@@ -3,6 +3,7 @@ import 'dart:io';
 
 import '../data/app_data.dart';
 import '../data/criteria.dart';
+import '../data/providers_catalog.dart';
 import '../report/report.dart';
 import '../report/report_validator.dart';
 import 'ai_provider.dart';
@@ -18,6 +19,20 @@ const Duration analysisTimeLimit = Duration(minutes: 5);
 /// Повтор после невалидного ответа запускается, только если до потолка
 /// остаётся не меньше этого (и не меньше, чем занял первый запрос).
 const Duration minRetryTime = Duration(seconds: 60);
+
+/// Новая попытка после перегрузки или смены модели начинается, только если
+/// до потолка остаётся не меньше этого (плюс пауза перед ней).
+const Duration minAttemptTime = Duration(seconds: 60);
+
+/// 503 пришёл дольше этого — ту же модель не повторяем, сразу запасная.
+const Duration slowOverloadThreshold = Duration(seconds: 30);
+
+/// Паузы перед повтором после перегрузки — растут по ходу анализа.
+const List<Duration> overloadPauses = [
+  Duration(seconds: 5),
+  Duration(seconds: 10),
+  Duration(seconds: 15),
+];
 
 /// «5 минут» — для строк интерфейса.
 String get analysisTimeLimitRu => '${analysisTimeLimit.inMinutes} минут';
@@ -37,9 +52,43 @@ enum AnalysisStage {
   final String labelRu;
 }
 
+/// Почему начата попытка (для «Для разработчика» и строк экрана анализа).
+enum AttemptReason {
+  /// Первый запрос.
+  first,
+
+  /// Прошлый ответ не прошёл проверку — исправляющий запрос.
+  invalidResponse,
+
+  /// Сервер перегружен (503) — повтор той же модели или запасная.
+  overloaded,
+
+  /// Квота модели исчерпана (429) — запасная модель.
+  rateLimit,
+
+  /// Запасная модель недоступна (404 и т. п.) — следующая.
+  modelUnavailable,
+}
+
+/// Что показать на экране анализа о повторе или смене модели.
+class AttemptNotice {
+  const AttemptNotice({required this.reason, required this.model, this.nextModel});
+
+  final AttemptReason reason;
+
+  /// Модель, с которой случилась неудача.
+  final String model;
+
+  /// Запасная модель (null — повтор той же).
+  final String? nextModel;
+}
+
 class AnalysisProgress {
   const AnalysisProgress(this.stage,
-      {this.fraction, this.isRetry = false, this.receivedBytes});
+      {this.fraction, this.isRetry = false, this.receivedBytes, this.notice});
+
+  /// Повтор или переход на запасную модель (null — ничего нового).
+  final AttemptNotice? notice;
 
   final AnalysisStage stage;
   final double? fraction;
@@ -53,9 +102,25 @@ class AnalysisProgress {
 
 /// Один запрос к ИИ (первый или повторный) — для «Для разработчика».
 class AiAttempt {
-  AiAttempt({required this.retry});
+  AiAttempt(
+      {required this.retry,
+      this.model,
+      this.reason = AttemptReason.first,
+      this.pause = Duration.zero});
 
   final bool retry;
+
+  /// Модель этой попытки (основная или запасная).
+  final String? model;
+
+  /// Почему попытка начата.
+  final AttemptReason reason;
+
+  /// Пауза перед попыткой.
+  final Duration pause;
+
+  /// HTTP-статус, время заголовков и первого байта, источник ошибки.
+  HttpDiag? diag;
 
   /// До конца отправки и до ответа (от начала запроса).
   Duration? sendTime;
@@ -70,6 +135,13 @@ class AiAttempt {
 
   Map<String, Object?> toJson() => {
         'retry': retry,
+        'model': model,
+        'reason': reason.name,
+        'pause_ms': pause.inMilliseconds,
+        'http_status': diag?.status,
+        'headers_ms': diag?.headersTime?.inMilliseconds,
+        'first_byte_ms': diag?.firstByteTime?.inMilliseconds,
+        'error_source': diag?.errorSource?.name,
         'send_ms': sendTime?.inMilliseconds,
         'total_ms': totalTime?.inMilliseconds,
         'sent_bytes': sentBytes,
@@ -90,10 +162,17 @@ class AnalysisTrace {
   int? frameCount;
   String? danceId;
 
-  /// Провайдер и модель (имя из каталога, не ключ).
+  /// Провайдер и модель (имя из каталога, не ключ). [model] — запрошенная
+  /// (из настроек), [answeredModel] — фактически ответившая.
   String? providerName;
   String? model;
+  String? answeredModel;
   bool demo = false;
+
+  /// Настройка «Использовать запасные модели» и цепочка моделей этого
+  /// анализа (первая — модель пользователя).
+  bool? useFallbackModels;
+  List<String> modelChain = const [];
 
   /// Частота, с которой модель смотрит видео (если API это позволяет).
   double? videoFps;
@@ -122,10 +201,22 @@ class AnalysisTrace {
 }
 
 class AnalysisResult {
-  const AnalysisResult({required this.report, required this.retried});
+  const AnalysisResult(
+      {required this.report,
+      required this.retried,
+      this.requestedModel,
+      this.answeredModel});
 
   final DanceReport report;
   final bool retried;
+  final String? requestedModel;
+  final String? answeredModel;
+
+  /// Отчёт подготовила запасная модель (основная была перегружена).
+  String? get fallbackModel =>
+      answeredModel != null && answeredModel != requestedModel
+          ? answeredModel
+          : null;
 }
 
 /// Подготовка → промпт → провайдер → проверка (+ один повтор).
@@ -138,7 +229,14 @@ class AnalysisPipeline {
     required this.tempStorage,
     this.demo = false,
     this.timeLimit = analysisTimeLimit,
-  })  : _validator = ReportValidator(data.criteria),
+    this.fallbackModels = const [],
+    this.providerFor,
+    this.useFallbackModels,
+    this.overloadHintRu,
+    this.slowOverload = slowOverloadThreshold,
+    Future<void> Function(Duration, CancelToken)? pause,
+  })  : _pause = pause ?? _cancellableDelay,
+        _validator = ReportValidator(data.criteria),
         _prompts = PromptBuilder(data);
 
   final AppData data;
@@ -151,6 +249,28 @@ class AnalysisPipeline {
 
   /// Потолок на весь анализ (в тестах — короче).
   final Duration timeLimit;
+
+  /// Запасные модели провайдера (пусто — настройка выключена или их нет).
+  final List<FallbackModel> fallbackModels;
+
+  /// Адаптер того же провайдера для другой модели (запасной).
+  final AiProvider Function(String model)? providerFor;
+
+  /// Состояние настройки «Использовать запасные модели» (для JSON).
+  final bool? useFallbackModels;
+
+  /// Подсказка провайдера к ошибке «Сервер ИИ перегружен».
+  final String? overloadHintRu;
+
+  /// Порог «медленного» 503 (в тестах — другой).
+  final Duration slowOverload;
+
+  final Future<void> Function(Duration, CancelToken) _pause;
+
+  static Future<void> _cancellableDelay(Duration d, CancelToken c) async {
+    await Future.any([Future<void>.delayed(d), c.whenCancelled]);
+    c.throwIfCancelled();
+  }
   final ReportValidator _validator;
   final PromptBuilder _prompts;
 
@@ -193,7 +313,8 @@ class AnalysisPipeline {
           ? videoFps
           : null
       ..thinkingLevel = thinking
-      ..maxFramesSetting = maxFrames;
+      ..maxFramesSetting = maxFrames
+      ..useFallbackModels = useFallbackModels;
     Directory? workDir;
     try {
       workDir = await tempStorage.createWorkDir();
@@ -257,28 +378,81 @@ class AnalysisPipeline {
         thinkingLevel: thinking,
       );
 
-      Duration? firstAttempt;
-      for (var attempt = 0; attempt < 2; attempt++) {
-        final isRetry = attempt > 0;
-        final remaining = timeLimit - total.elapsed;
-        if (isRetry) {
-          // Повтор — только если на него остаётся разумное время.
-          final need = firstAttempt != null && firstAttempt > minRetryTime
-              ? firstAttempt
-              : minRetryTime;
+      // Цепочка моделей: модель пользователя, затем запасные, принимающие
+      // этот способ подачи (spec 7.7).
+      final chain = <String>[provider.model];
+      final framesOnly = <String>[];
+      if (providerFor != null) {
+        for (final f in fallbackModels) {
+          if (chain.contains(f.id) || f.id.trim().isEmpty) continue;
+          if (f.modes.contains(mode.name)) {
+            chain.add(f.id);
+          } else if (mode == SubmissionMode.video &&
+              f.modes.contains(SubmissionMode.frames.name)) {
+            framesOnly.add(f.id);
+          }
+        }
+      }
+      trace?.modelChain = List.unmodifiable(chain);
+
+      final base = request;
+      var current = provider;
+      var modelIndex = 0;
+      var sameModelRetried = false;
+      var correctionUsed = false;
+      var pauseIndex = 0;
+      var nextPause = Duration.zero;
+      var nextReason = AttemptReason.first;
+      Duration? lastAnswerTime;
+      AiException? lastError;
+      var sawOverload = false;
+
+      // Повторы и запасные исчерпаны (или на них нет времени).
+      AnalysisFailure exhausted(String why) {
+        final video = mode == SubmissionMode.video;
+        if (sawOverload || lastError == null) {
+          return AnalysisFailure(FailureKind.overloaded,
+              details: [why, ?lastError?.detail],
+              hintRu: overloadHintRu,
+              videoMode: video,
+              framesFallback: video && framesOnly.isNotEmpty);
+        }
+        final f = AnalysisFailure.fromAi(lastError, videoMode: video);
+        return f.withDetails([why, ...f.details]);
+      }
+
+      while (true) {
+        final isRetry = nextReason == AttemptReason.invalidResponse;
+        var remaining = timeLimit - total.elapsed;
+        if (nextReason == AttemptReason.invalidResponse) {
+          // Исправляющий повтор — только если на него остаётся разумное время.
+          final t = lastAnswerTime;
+          final need = t != null && t > minRetryTime ? t : minRetryTime;
           if (remaining < need) {
             throw AnalysisFailure(FailureKind.timeLimit, details: [
               'первый ответ не прошёл проверку, на повтор не хватает времени '
                   '(осталось ${remaining.inSeconds} с)',
             ]);
           }
+        } else if (nextReason != AttemptReason.first &&
+            remaining < minAttemptTime + nextPause) {
+          throw exhausted('на следующую попытку не хватает времени '
+              '(осталось ${remaining.inSeconds} с)');
         }
         if (remaining <= Duration.zero) {
           throw const AnalysisFailure(FailureKind.timeLimit,
               details: ['потолок исчерпан на подготовке']);
         }
+        if (nextPause > Duration.zero) {
+          await _pause(nextPause, cancel);
+          remaining = timeLimit - total.elapsed;
+        }
         onProgress(AnalysisProgress(AnalysisStage.sending, isRetry: isRetry));
-        final record = AiAttempt(retry: isRetry);
+        final record = AiAttempt(
+            retry: nextReason != AttemptReason.first,
+            model: current.model,
+            reason: nextReason,
+            pause: nextPause);
         trace?.attempts.add(record);
         final sw = Stopwatch()..start();
         // Своя отмена запроса: пользователь или потолок времени.
@@ -290,9 +464,10 @@ class AnalysisPipeline {
           timedOut = true;
           attemptCancel.cancel();
         });
-        final String raw;
+        var raw = '';
+        AiException? failed;
         try {
-          final response = await provider.analyze(
+          final response = await current.analyze(
             request,
             onProgress: (p) {
               if (p.phase != AiPhase.sending) record.sendTime ??= sw.elapsed;
@@ -315,15 +490,17 @@ class AnalysisPipeline {
             ..sentBytes = response.sentBytes
             ..usage = response.usage
             ..finishReason = response.finishReason
-            ..notes = response.notes;
+            ..notes = response.notes
+            ..diag = response.diag;
         } on AiException catch (e) {
           record
             ..totalTime = sw.elapsed
+            ..sentBytes = e.sentBytes
             ..notes = e.notes
+            ..diag = e.diag
             ..error =
                 '${e.kind.name}${e.detail == null ? '' : ': ${e.detail}'}';
-          throw AnalysisFailure.fromAi(e,
-              videoMode: mode == SubmissionMode.video);
+          failed = e;
         } on AnalysisCancelled {
           record.totalTime = sw.elapsed;
           if (timedOut && !cancel.isCancelled) {
@@ -337,29 +514,90 @@ class AnalysisPipeline {
           timer.cancel();
           unawaited(userSub);
         }
-        firstAttempt ??= sw.elapsed;
         cancel.throwIfCancelled();
+
+        if (failed != null) {
+          final e = failed;
+          lastError = e;
+          final AttemptReason reason;
+          switch (e.kind) {
+            case AiErrorKind.overloaded:
+              sawOverload = true;
+              reason = AttemptReason.overloaded;
+              // Быстрый 503 — один повтор той же модели после паузы.
+              if (!sameModelRetried && sw.elapsed < slowOverload) {
+                sameModelRetried = true;
+                nextPause = overloadPauses[pauseIndex < overloadPauses.length
+                    ? pauseIndex
+                    : overloadPauses.length - 1];
+                pauseIndex++;
+                nextReason = reason;
+                onProgress(AnalysisProgress(AnalysisStage.sending,
+                    notice: AttemptNotice(reason: reason, model: current.model)));
+                continue;
+              }
+            case AiErrorKind.rateLimit:
+              reason = AttemptReason.rateLimit;
+            case AiErrorKind.modelUnavailable when modelIndex > 0:
+              reason = AttemptReason.modelUnavailable;
+            default:
+              // Ключ, сеть, размер, фильтры, модель пользователя — без цепочки.
+              throw AnalysisFailure.fromAi(e,
+                  videoMode: mode == SubmissionMode.video);
+          }
+          if (modelIndex + 1 >= chain.length) {
+            throw exhausted(chain.length > 1
+                ? 'все модели цепочки перегружены или недоступны'
+                : 'повторы не помогли');
+          }
+          final failedModel = current.model;
+          modelIndex++;
+          current = providerFor!(chain[modelIndex]);
+          sameModelRetried = false;
+          request = base;
+          nextPause = Duration.zero;
+          nextReason = reason;
+          onProgress(AnalysisProgress(AnalysisStage.sending,
+              notice: AttemptNotice(
+                  reason: reason, model: failedModel, nextModel: current.model)));
+          continue;
+        }
+
+        lastAnswerTime = sw.elapsed;
         trace?.responses.add(raw);
 
         onProgress(AnalysisProgress(AnalysisStage.validating, isRetry: isRetry));
         final outcome = parseReport(raw, dance: dance, validator: _validator);
         switch (outcome) {
           case ParsedReport(:final report, :final json):
-            trace?.reportJson = json;
-            return AnalysisResult(report: report, retried: isRetry);
+            trace
+              ?..reportJson = json
+              ..answeredModel = current.model;
+            return AnalysisResult(
+                report: report,
+                retried: trace == null ? isRetry : trace.retried,
+                requestedModel: provider.model,
+                answeredModel: current.model);
           case InvalidReport(:final problems):
             trace?.problems.add(problems);
-            if (isRetry) {
+            if (correctionUsed) {
               throw AnalysisFailure(FailureKind.invalidResponse,
                   details: problems);
             }
+            correctionUsed = true;
             request = request.retry(
               note: _prompts.retryNote(problems),
               previous: raw,
             );
+            nextPause = Duration.zero;
+            nextReason = AttemptReason.invalidResponse;
+            onProgress(AnalysisProgress(AnalysisStage.sending,
+                isRetry: true,
+                notice: AttemptNotice(
+                    reason: AttemptReason.invalidResponse,
+                    model: current.model)));
         }
       }
-      throw const AnalysisFailure(FailureKind.internal);
     } on AnalysisFailure catch (f) {
       trace?.failure = [f.kind.name, ...f.details.take(5)].join(': ');
       rethrow;

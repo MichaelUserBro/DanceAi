@@ -44,6 +44,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
   AnalysisStage _stage = AnalysisStage.checkingVideo;
   final _done = <AnalysisStage>{};
   bool _retry = false;
+  AttemptNotice? _notice;
   bool _started = false;
   bool _demo = false;
   bool _videoMode = false;
@@ -122,8 +123,16 @@ class _AnalysisScreenState extends State<AnalysisScreen>
       final report = result.report;
       navigator.pushReplacement(stageRoute(
         report.videoAssessment.status == VideoStatus.ok
-            ? ReportScreen(report: report, dance: dance, session: session)
-            : WarningScreen(report: report, dance: dance, session: session),
+            ? ReportScreen(
+                report: report,
+                dance: dance,
+                session: session,
+                fallbackModel: result.fallbackModel)
+            : WarningScreen(
+                report: report,
+                dance: dance,
+                session: session,
+                fallbackModel: result.fallbackModel),
       ));
     } on AnalysisCancelled {
       services.dev.record(trace);
@@ -149,6 +158,7 @@ class _AnalysisScreenState extends State<AnalysisScreen>
       _fraction = p.fraction;
       _received = p.receivedBytes;
       _retry = p.isRetry;
+      if (p.notice != null) _notice = p.notice;
     });
   }
 
@@ -204,7 +214,11 @@ class _AnalysisScreenState extends State<AnalysisScreen>
       pulse: _pulse,
       accent: accent,
       title: dance.nameRu,
-      subtitle: _retry ? 'Повторный запрос' : _stageLabel(),
+      subtitle: _notice?.nextModel != null
+          ? 'Запасная модель'
+          : _retry || _notice != null
+              ? 'Повторный запрос'
+              : _stageLabel(),
     );
 
     final steps = Column(
@@ -249,10 +263,10 @@ class _AnalysisScreenState extends State<AnalysisScreen>
                     : _StepState.pending,
             accent: accent,
           ),
-        if (_retry) ...[
+        if (_notice != null) ...[
           const SizedBox(height: 8),
           Text(
-            'Первый ответ ИИ не прошёл проверку — отправлен повторный запрос.',
+            noticeText(_notice!),
             style: StageText.body(13, color: StageColors.partial),
           ),
         ],
@@ -488,4 +502,23 @@ class _PulsePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_PulsePainter old) => old.accent != accent;
+}
+
+/// Строка экрана анализа о повторе или запасной модели (spec 8б.3).
+String noticeText(AttemptNotice n) {
+  final next = n.nextModel;
+  if (next == null) {
+    return switch (n.reason) {
+      AttemptReason.invalidResponse =>
+        'Первый ответ ИИ не прошёл проверку — отправлен повторный запрос.',
+      _ => 'Сервер ИИ перегружен, пробую ещё раз…',
+    };
+  }
+  return switch (n.reason) {
+    AttemptReason.rateLimit =>
+      'У модели ${n.model} исчерпан лимит запросов, пробую запасную: $next…',
+    AttemptReason.modelUnavailable =>
+      'Модель ${n.model} недоступна, пробую запасную: $next…',
+    _ => 'Модель ${n.model} перегружена, пробую запасную: $next…',
+  };
 }

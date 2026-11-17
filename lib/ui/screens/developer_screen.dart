@@ -159,6 +159,12 @@ class DeveloperScreen extends StatelessWidget {
                       ? 'демо-режим (заглушка)'
                       : '${trace.providerName}'),
                   if (!trace.demo) _kv('Модель', '${trace.model}'),
+                  if (trace.answeredModel != null &&
+                      trace.answeredModel != trace.model)
+                    _kv('Ответила модель', '${trace.answeredModel}'),
+                  if (trace.useFallbackModels != null)
+                    _kv('Запасные модели',
+                        trace.useFallbackModels! ? 'включены' : 'выключены'),
                   _kv('Способ подачи', _modeText(trace)),
                   if (trace.thinkingLevel != null)
                     _kv('Уровень размышления', trace.thinkingLevel!),
@@ -166,9 +172,14 @@ class DeveloperScreen extends StatelessWidget {
                     _kv('Максимум кадров (настройка)',
                         '${trace.maxFramesSetting}'),
                   _kv('Ответов ИИ', '${trace.responses.length}'),
-                  _kv('Повторный запрос', trace.retried
-                      ? 'был (первый ответ не прошёл проверку)'
-                      : 'нет'),
+                  _kv(
+                      'Повторный запрос',
+                      !trace.retried
+                          ? 'нет'
+                          : trace.attempts.any(
+                                  (a) => a.reason == AttemptReason.invalidResponse)
+                              ? 'был (первый ответ не прошёл проверку)'
+                              : 'был (перегрузка или запасная модель)'),
                   for (final (i, a) in trace.attempts.indexed)
                     _kv('Запрос №${i + 1}', _attempt(a)),
                   if (trace.totalTime != null)
@@ -239,8 +250,16 @@ class DeveloperScreen extends StatelessWidget {
         ? null
         : 'токены: вход ${u.inputTokens ?? '—'}, выход ${u.outputTokens ?? '—'}'
             '${u.thinkingTokens == null ? '' : ', размышление ${u.thinkingTokens}'}';
+    final d = a.diag;
     return [
+      if (a.model != null) 'модель ${a.model}',
+      if (a.reason != AttemptReason.first) 'причина: ${a.reason.name}',
+      if (a.pause > Duration.zero) 'пауза ${_secs(a.pause)}',
       if (a.sentBytes != null) 'отправлено ${_size(a.sentBytes!)}',
+      if (d?.status != null) 'HTTP ${d!.status}',
+      if (d?.headersTime != null) 'заголовки ${_secs(d!.headersTime)}',
+      if (d?.firstByteTime != null) 'первый байт ${_secs(d!.firstByteTime)}',
+      if (d?.errorSource != null) 'ошибка из ${d!.errorSource!.name}',
       if (a.sendTime != null) 'отправка ${_secs(a.sendTime)}',
       'до ответа ${_secs(a.totalTime)}',
       ?tokens,

@@ -125,7 +125,7 @@ void main() {
 
     test('ошибка API: копия удалена', () async {
       final t = tool();
-      final http = FakeHttp((c, i) => jsonResult(500, {'error': {'message': 'boom'}}));
+      final http = FakeHttp((c, i) => jsonResult(400, {'error': {'message': 'boom'}}));
       await expectLater(
           run(GoogleProvider(model: 'm', apiKey: _key, baseUrl: 'https://g.test',
               transport: http), t),

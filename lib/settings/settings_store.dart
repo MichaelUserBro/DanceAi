@@ -68,6 +68,7 @@ class SettingsStore extends ChangeNotifier {
   double _videoFps = 2;
   String? _thinkingLevel;
   final _maxFrames = <String, int>{};
+  final _useFallback = <String, bool>{};
 
   static const _kProvider = 'provider_id';
   static const _kCustomUrl = 'custom_base_url';
@@ -76,6 +77,7 @@ class SettingsStore extends ChangeNotifier {
   static const _kVideoFps = 'video_fps';
   static const _kThinking = 'thinking_level';
   static String _kMaxFrames(String id) => 'max_frames.$id';
+  static String _kFallback(String id) => 'use_fallback.$id';
 
   /// Уровни размышления в «Для разработчика» (null — по умолчанию модели).
   static const thinkingLevels = ['low', 'medium', 'high'];
@@ -103,6 +105,7 @@ class SettingsStore extends ChangeNotifier {
       _videoMode[p.id] = await _prefs.getBool(_kVideo(p.id)) ?? false;
       final mf = int.tryParse(await _prefs.getString(_kMaxFrames(p.id)) ?? '');
       if (mf != null) _maxFrames[p.id] = mf;
+      _useFallback[p.id] = await _prefs.getBool(_kFallback(p.id)) ?? true;
       final key = await keys.read(p.id);
       _hasKey[p.id] = key != null && key.isNotEmpty;
     }
@@ -128,6 +131,9 @@ class SettingsStore extends ChangeNotifier {
 
   /// «Максимум кадров» провайдера; null — по умолчанию адаптера.
   int? maxFramesFor(String providerId) => _maxFrames[providerId];
+
+  /// «Использовать запасные модели при перегрузке» (по умолчанию включено).
+  bool useFallbackFor(String providerId) => _useFallback[providerId] ?? true;
 
   /// Адаптер выбранного провайдера умеет передавать видео.
   bool canSendVideo(ProviderInfo p) =>
@@ -195,6 +201,12 @@ class SettingsStore extends ChangeNotifier {
     _thinkingLevel = thinkingLevels.contains(level) ? level : null;
     notifyListeners();
     await _prefs.setString(_kThinking, _thinkingLevel ?? '');
+  }
+
+  Future<void> setUseFallback(String providerId, bool value) async {
+    _useFallback[providerId] = value;
+    notifyListeners();
+    await _prefs.setBool(_kFallback(providerId), value);
   }
 
   /// Пусто или вне диапазона — по умолчанию адаптера.

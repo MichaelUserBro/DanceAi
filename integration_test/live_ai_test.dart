@@ -15,6 +15,8 @@
 // Каждый случай × каждое видео = 1–2 запроса (второй — при повторе).
 // OUT_DIR — куда сохранить JSON «Для разработчика» (без ключа).
 // LIVE_MAX_FRAMES — «Максимум кадров» провайдера (пусто — по умолчанию).
+// LIVE_FALLBACK=1 — с запасными моделями (по умолчанию выключены, чтобы
+// оценки разных моделей не смешивались).
 //
 // ignore_for_file: avoid_print
 import 'dart:io';
@@ -40,6 +42,7 @@ const _cases = String.fromEnvironment('LIVE_CASES');
 const _videos = String.fromEnvironment('LIVE_VIDEOS');
 const _outDir = String.fromEnvironment('OUT_DIR');
 const _maxFrames = String.fromEnvironment('LIVE_MAX_FRAMES');
+const _fallback = String.fromEnvironment('LIVE_FALLBACK');
 const _videoDir = String.fromEnvironment('VIDEO_DIR', defaultValue: 'test_videos');
 
 const _envKeys = {
@@ -132,6 +135,7 @@ void main() {
         await settings.saveKey(providerId, key);
         await settings.setVideoMode(providerId, mode == 'video');
         await settings.setMaxFrames(providerId, int.tryParse(_maxFrames));
+        await settings.setUseFallback(providerId, _fallback == '1');
         final services = AppServices(
           data: data,
           settings: settings,
@@ -184,7 +188,8 @@ void main() {
             'кадров ${t.frameCount ?? '—'} | '
             '${(sw.elapsedMilliseconds / 1000).toStringAsFixed(0)} s | '
             '${report == null ? '—' : (t.retried ? 'нет (повтор)' : 'да')} | '
-            '$scores | $status | ${t.failure ?? 'отчёт'}');
+            '$scores | $status | ${t.failure ?? 'отчёт'}'
+            '${t.answeredModel != null && t.answeredModel != model ? ' | ответила ${t.answeredModel}' : ''}');
         // Время по этапам и токены по каждому запросу.
         String sec(Duration? d) =>
             d == null ? '—' : (d.inMilliseconds / 1000).toStringAsFixed(1);
@@ -194,7 +199,13 @@ void main() {
         ].join(', ');
         final attempts = [
           for (final a in t.attempts)
-            '${a.retry ? 'повтор' : 'запрос'}: отправка ${sec(a.sendTime)}, '
+            '${a.model} ${a.reason.name}'
+                '${a.pause > Duration.zero ? ' (пауза ${sec(a.pause)})' : ''}: '
+                '${a.sentBytes == null ? '' : '${(a.sentBytes! / 1e6).toStringAsFixed(1)} MB, '}'
+                'отправка ${sec(a.sendTime)}, '
+                'HTTP ${a.diag?.status ?? '—'}, заголовки ${sec(a.diag?.headersTime)}, '
+                'первый байт ${sec(a.diag?.firstByteTime)}'
+                '${a.diag?.errorSource == null ? '' : ', ошибка из ${a.diag!.errorSource!.name}'}, '
                 'до ответа ${sec(a.totalTime)}, токены '
                 '${a.usage?.inputTokens ?? '—'}/${a.usage?.outputTokens ?? '—'}'
                 '/${a.usage?.thinkingTokens ?? '—'}'

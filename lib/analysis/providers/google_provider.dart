@@ -228,13 +228,14 @@ class GoogleProvider extends HttpAiProvider {
           if (o.jsonMode) 'responseMimeType': 'application/json',
           if (o.jsonMode && o.useSchema)
             'responseJsonSchema': providerSchema(request.reportSchema),
-          if (request.thinkingLevel != null)
+          if (o.useThinking && request.thinkingLevel != null)
             'thinkingConfig': {
               'thinkingLevel': request.thinkingLevel!.toUpperCase(),
             },
         },
       },
       headers: _auth,
+      stopOnSseError: true,
     );
   }
 

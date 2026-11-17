@@ -109,12 +109,44 @@ enum AiErrorKind {
 
   /// Запрос отклонён фильтрами провайдера.
   blocked,
+
+  /// Сервер перегружен или временно недоступен (503 UNAVAILABLE, «high
+  /// demand», overloaded, 500/502/504) — можно повторить или взять запасную
+  /// модель.
+  overloaded,
+}
+
+/// Откуда пришла ошибка: HTTP-статусом или событием внутри потока SSE.
+enum AiErrorSource { http, sse }
+
+/// Сведения об HTTP-обмене для «Для разработчика» (spec 7.8): когда пришли
+/// заголовки и первый байт тела (от начала запроса), статус, источник ошибки.
+class HttpDiag {
+  const HttpDiag(
+      {this.status, this.headersTime, this.firstByteTime, this.errorSource});
+
+  final int? status;
+  final Duration? headersTime;
+  final Duration? firstByteTime;
+  final AiErrorSource? errorSource;
+
+  HttpDiag withSource(AiErrorSource s) => HttpDiag(
+      status: status,
+      headersTime: headersTime,
+      firstByteTime: firstByteTime,
+      errorSource: s);
 }
 
 /// Ошибка API. Текст никогда не содержит ключа.
 class AiException implements Exception {
   const AiException(this.kind,
-      [this.detail, this.retryAfter, this.freeTier = false, this.notes = const []]);
+      [this.detail, this.retryAfter, this.freeTier = false])
+      : notes = const [],
+        sentBytes = null,
+        diag = null;
+
+  const AiException._full(this.kind, this.detail, this.retryAfter,
+      this.freeTier, this.notes, this.sentBytes, this.diag);
 
   final AiErrorKind kind;
 
@@ -131,9 +163,26 @@ class AiException implements Exception {
   /// для «Для разработчика». Без ключа.
   final List<String> notes;
 
+  /// Сколько байт ушло в запросе, после которого пришла ошибка.
+  final int? sentBytes;
+
+  /// Сведения об HTTP-обмене (статус, время заголовков, источник ошибки).
+  final HttpDiag? diag;
+
+  /// Та же ошибка с заметками адаптера и сведениями о запросе.
+  AiException withInfo(
+          {List<String>? notes, String? detail, int? sentBytes, HttpDiag? diag}) =>
+      AiException._full(
+          kind,
+          detail ?? this.detail,
+          retryAfter,
+          freeTier,
+          notes == null ? this.notes : List.unmodifiable(notes),
+          sentBytes ?? this.sentBytes,
+          diag ?? this.diag);
+
   /// Та же ошибка с заметками адаптера.
-  AiException withNotes(List<String> notes) =>
-      AiException(kind, detail, retryAfter, freeTier, List.unmodifiable(notes));
+  AiException withNotes(List<String> notes) => withInfo(notes: notes);
 
   @override
   String toString() => 'AiException($kind${detail == null ? '' : ': $detail'})';
@@ -163,6 +212,7 @@ class AiResponse {
     this.finishReason,
     this.sentBytes,
     this.notes = const [],
+    this.diag,
   });
 
   /// Текст ответа (JSON уже вырезан из обёртки, если она была).
@@ -175,6 +225,9 @@ class AiResponse {
 
   /// Что адаптер сделал сам: повтор без JSON-режима, загрузка файла и т. п.
   final List<String> notes;
+
+  /// Сведения об HTTP-обмене (если адаптер работает по HTTP).
+  final HttpDiag? diag;
 }
 
 /// Что удалось узнать о модели (spec 7.2, подсказка в настройках).

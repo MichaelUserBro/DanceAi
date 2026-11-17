@@ -110,6 +110,10 @@ AiException httpError(HttpResult r, {required String? key, bool freeTier = false
           'image input', 'video input', 'modalit', 'unsupported mime',
           'invalid model'])) {
     kind = AiErrorKind.modelUnavailable;
+  } else if (const {500, 502, 503, 504, 529}.contains(r.status) ||
+      has(['overloaded', 'unavailable', 'high demand', 'capacity'])) {
+    // Перегрузка или временная недоступность: повтор / запасная модель.
+    kind = AiErrorKind.overloaded;
   } else {
     kind = AiErrorKind.server;
   }
@@ -119,6 +123,13 @@ AiException httpError(HttpResult r, {required String? key, bool freeTier = false
     kind == AiErrorKind.rateLimit ? retryAfter(r) : null,
     kind == AiErrorKind.rateLimit && freeTier,
   );
+}
+
+/// Ошибка 400 из-за уровня «размышления»: модель не поддерживает параметр.
+bool isThinkingRejected(HttpResult r) {
+  if (r.status != 400) return false;
+  final m = errorMessage(r).toLowerCase();
+  return m.contains('thinking');
 }
 
 /// Ошибка 400 из-за строгой схемы ответа (провайдер её не принял).

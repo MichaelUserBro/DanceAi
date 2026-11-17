@@ -565,6 +565,20 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
               onChanged: canVideo ? (v) => s.setVideoMode(p.id, v) : null,
             ),
           ),
+          if (p.fallbackModels.isNotEmpty)
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text('Использовать запасные модели при перегрузке',
+                  style: StageText.body(15, weight: 600)),
+              subtitle: Text(
+                'Если модель перегружена или исчерпала лимит, анализ '
+                'продолжит другая модель: '
+                '${p.fallbackModels.map((f) => f.id).join(', ')}.',
+                style: StageText.body(12.5, color: StageColors.textMuted),
+              ),
+              value: s.useFallbackFor(p.id),
+              onChanged: (v) => s.setUseFallback(p.id, v),
+            ),
           if (!p.isCustom) ...[
             const SizedBox(height: 8),
             Align(

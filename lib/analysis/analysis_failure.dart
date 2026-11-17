@@ -1,5 +1,6 @@
 import 'ai_provider.dart';
 import 'analysis_pipeline.dart' show analysisTimeLimitRu;
+import 'quota_time.dart';
 import 'video_preparer.dart';
 
 /// Что пользователь может сделать на экране ошибки (spec 8б.6).
@@ -31,6 +32,9 @@ enum FailureKind {
 
   /// Анализ не уложился в потолок времени (spec 7.7).
   timeLimit,
+
+  /// Сервер ИИ перегружен: повторы и запасные модели не помогли (spec 7.7).
+  overloaded,
 }
 
 /// Понятная ошибка анализа: русский текст и действия. Ключ в текст не попадает.
@@ -39,7 +43,9 @@ class AnalysisFailure implements Exception {
       {this.details = const [],
       this.retryAfter,
       this.freeTier = false,
-      this.videoMode = false});
+      this.videoMode = false,
+      this.hintRu,
+      this.framesFallback = false});
 
   factory AnalysisFailure.fromPrepare(PrepareException e) =>
       AnalysisFailure(switch (e.kind) {
@@ -63,6 +69,7 @@ class AnalysisFailure implements Exception {
           AiErrorKind.modelUnavailable => FailureKind.modelUnavailable,
           AiErrorKind.insufficientFunds => FailureKind.insufficientFunds,
           AiErrorKind.blocked => FailureKind.blocked,
+          AiErrorKind.overloaded => FailureKind.overloaded,
         },
         details: [?e.detail],
         retryAfter: e.retryAfter,
@@ -80,6 +87,22 @@ class AnalysisFailure implements Exception {
 
   /// Материал отправлялся видео целиком (можно предложить кадры).
   final bool videoMode;
+
+  /// Подсказка провайдера к ошибке перегрузки (`overload_hint_ru`).
+  final String? hintRu;
+
+  /// Перегрузка в режиме видео: есть запасные модели, принимающие только
+  /// кадры, — можно «Отправить кадрами».
+  final bool framesFallback;
+
+  /// Та же ошибка с другими подробностями.
+  AnalysisFailure withDetails(List<String> details) => AnalysisFailure(kind,
+      details: details,
+      retryAfter: retryAfter,
+      freeTier: freeTier,
+      videoMode: videoMode,
+      hintRu: hintRu,
+      framesFallback: framesFallback);
 
   /// Технические подробности для раздела «Для разработчика».
   final List<String> details;
@@ -101,6 +124,7 @@ class AnalysisFailure implements Exception {
         FailureKind.videoTooLarge => 'Видео слишком большое для модели',
         FailureKind.videoEncodeFailed => 'Не удалось подготовить видео',
         FailureKind.timeLimit => 'ИИ отвечает слишком долго',
+        FailureKind.overloaded => 'Сервер ИИ перегружен',
       };
 
   String get message => switch (kind) {
@@ -159,11 +183,20 @@ class AnalysisFailure implements Exception {
           'ИИ не успел подготовить отчёт за $analysisTimeLimitRu. '
               'Попробуйте ещё раз — провайдер мог быть перегружен — или '
               'выберите в настройках более быструю модель.',
+        FailureKind.overloaded => [
+            'На бесплатном тарифе такое бывает. Попробуйте через несколько '
+                'минут или позже${hintRu == null ? '' : ' (${fillQuotaHint(hintRu!)})'}.',
+            if (framesFallback)
+              'Можно отправить то же видео кадрами — для кадров есть '
+                  'запасные модели.',
+          ].join(' '),
       };
 
   /// «Попробовать ещё раз» после потолка времени, иначе «Повторить».
   String get retryLabel =>
-      kind == FailureKind.timeLimit ? 'Попробовать ещё раз' : 'Повторить';
+      kind == FailureKind.timeLimit || kind == FailureKind.overloaded
+          ? 'Попробовать ещё раз'
+          : 'Повторить';
 
   static String _wait(Duration d) {
     final s = d.inSeconds;
@@ -194,6 +227,14 @@ class AnalysisFailure implements Exception {
             FailureAction.chooseOtherVideo,
           ],
         FailureKind.timeLimit => const [
+            FailureAction.retry,
+            FailureAction.openSettings,
+          ],
+        FailureKind.overloaded when framesFallback => const [
+            FailureAction.sendFrames,
+            FailureAction.retry,
+          ],
+        FailureKind.overloaded => const [
             FailureAction.retry,
             FailureAction.openSettings,
           ],

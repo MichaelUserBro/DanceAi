@@ -67,13 +67,39 @@ class AppServices {
     );
   }
 
-  Future<AnalysisPipeline> createPipeline() async => AnalysisPipeline(
+  Future<AnalysisPipeline> createPipeline() async {
+    final provider = await createProvider();
+    final p = settings.provider;
+    if (settings.demoMode || p == null) {
+      return AnalysisPipeline(
         data: data,
         preparer: preparer,
-        provider: await createProvider(),
+        provider: provider,
         tempStorage: tempStorage,
         demo: settings.demoMode,
       );
+    }
+    // Запасные модели — данными из providers.json (spec 7.7), у всех
+    // провайдеров одинаково; ключ читается один раз.
+    final useFallback = settings.useFallbackFor(p.id);
+    final key = await settings.readKey(p.id) ?? '';
+    return AnalysisPipeline(
+      data: data,
+      preparer: preparer,
+      provider: provider,
+      tempStorage: tempStorage,
+      fallbackModels: useFallback ? p.fallbackModels : const [],
+      useFallbackModels: p.fallbackModels.isEmpty ? null : useFallback,
+      overloadHintRu: p.overloadHintRu,
+      providerFor: (model) => AdapterRegistry.create(
+        provider: p,
+        model: model,
+        apiKey: key,
+        baseUrl: settings.baseUrlFor(p),
+        transport: transport,
+      ),
+    );
+  }
 }
 
 class AppScope extends InheritedWidget {

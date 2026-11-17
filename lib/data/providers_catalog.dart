@@ -15,6 +15,23 @@ enum ApiType {
           orElse: () => throw FormatException('Неизвестный api_type: $value'));
 }
 
+/// Запасная модель провайдера (spec 7.7): берётся при перегрузке (503) или
+/// исчерпанной квоте (429) основной. [modes] — способы подачи, которые она
+/// принимает: `frames`, `video`.
+class FallbackModel {
+  const FallbackModel({required this.id, required this.modes});
+
+  factory FallbackModel.fromJson(Map<String, dynamic> json) => FallbackModel(
+        id: json['id'] as String,
+        modes: Set.unmodifiable((json['modes'] as List).cast<String>()),
+      );
+
+  static const knownModes = {'frames', 'video'};
+
+  final String id;
+  final Set<String> modes;
+}
+
 class ProviderInfo {
   const ProviderInfo({
     required this.id,
@@ -29,6 +46,8 @@ class ProviderInfo {
     this.isCustom = false,
     this.verifiedLive = true,
     this.modelHintRu,
+    this.fallbackModels = const [],
+    this.overloadHintRu,
   });
 
   factory ProviderInfo.fromJson(Map<String, dynamic> json) => ProviderInfo(
@@ -43,6 +62,11 @@ class ProviderInfo {
             (json['recommended_models'] as List? ?? const []).cast<String>(),
         verifiedLive: json['verified_live'] as bool? ?? true,
         modelHintRu: json['model_hint_ru'] as String?,
+        fallbackModels: [
+          for (final f in json['fallback_models'] as List? ?? const [])
+            FallbackModel.fromJson(f as Map<String, dynamic>),
+        ],
+        overloadHintRu: json['overload_hint_ru'] as String?,
       );
 
   factory ProviderInfo.customFromJson(Map<String, dynamic> json) =>
@@ -78,6 +102,13 @@ class ProviderInfo {
 
   /// Подсказка под полем «Модель» (`model_hint_ru`).
   final String? modelHintRu;
+
+  /// Запасные модели при перегрузке, лучшие первыми (`fallback_models`).
+  final List<FallbackModel> fallbackModels;
+
+  /// Дополнение к ошибке «Сервер ИИ перегружен» (`overload_hint_ru`);
+  /// `{{pacific_midnight_msk}}` — полночь по тихоокеанскому времени в МСК.
+  final String? overloadHintRu;
 }
 
 class ProvidersCatalog {
