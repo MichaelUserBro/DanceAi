@@ -997,6 +997,65 @@ void main() {
     expect(fractions.last, 1);
   });
 
+  /// Сервер на сокете: дочитывает запрос целиком и делает [then].
+  Future<ServerSocket> rawServer(void Function(Socket s) then) async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((socket) {
+      final got = <int>[];
+      socket.listen((d) {
+        got.addAll(d);
+        final text = latin1.decode(got);
+        final end = text.indexOf('\r\n\r\n');
+        if (end < 0) return;
+        final m = RegExp(r'content-length:\s*(\d+)', caseSensitive: false)
+            .firstMatch(text.substring(0, end));
+        final length = int.parse(m?.group(1) ?? '0');
+        if (got.length - end - 4 >= length) {
+          got.clear();
+          then(socket);
+        }
+      }, onError: (_) {});
+    });
+    return server;
+  }
+
+  test('IoHttpTransport: обрыв после отправки, до заголовков → noResponse',
+      () async {
+    final server = await rawServer((s) => s.destroy());
+    addTearDown(server.close);
+    await expectLater(
+      IoHttpTransport().send(
+          HttpCall.json('POST', Uri.parse('http://127.0.0.1:${server.port}/x'),
+              {'data': 'x' * 5000},
+              headers: {'x-goog-api-key': _key}),
+          cancel: CancelToken()),
+      throwsA(isA<AiException>()
+          .having((e) => e.kind, 'kind', AiErrorKind.noResponse)
+          .having((e) => e.detail, 'detail', contains('HttpException'))
+          .having((e) => e.toString(), 'text', isNot(contains(_key)))),
+    );
+  });
+
+  test('IoHttpTransport: обрыв после начала ответа → network', () async {
+    final server = await rawServer((s) async {
+      s.add(latin1.encode('HTTP/1.1 200 OK\r\n'
+          'content-type: text/event-stream\r\n'
+          'content-length: 1000\r\n\r\n'
+          'data: {"candidates": []}\n\n'));
+      await s.flush();
+      s.destroy();
+    });
+    addTearDown(server.close);
+    await expectLater(
+      IoHttpTransport().send(
+          HttpCall.json('POST', Uri.parse('http://127.0.0.1:${server.port}/x'),
+              {'a': 1}),
+          cancel: CancelToken()),
+      throwsA(isA<AiException>()
+          .having((e) => e.kind, 'kind', AiErrorKind.network)),
+    );
+  });
+
   test('IoHttpTransport: нет сервера → network без подробностей запроса', () async {
     final s = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = s.port;

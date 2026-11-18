@@ -69,7 +69,9 @@ class AnalysisFailure implements Exception {
           AiErrorKind.modelUnavailable => FailureKind.modelUnavailable,
           AiErrorKind.insufficientFunds => FailureKind.insufficientFunds,
           AiErrorKind.blocked => FailureKind.blocked,
-          AiErrorKind.overloaded => FailureKind.overloaded,
+          AiErrorKind.overloaded ||
+          AiErrorKind.noResponse =>
+            FailureKind.overloaded,
         },
         details: [?e.detail],
         retryAfter: e.retryAfter,

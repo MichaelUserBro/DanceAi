@@ -27,6 +27,15 @@ const Duration minAttemptTime = Duration(seconds: 60);
 /// 503 пришёл дольше этого — ту же модель не повторяем, сразу запасная.
 const Duration slowOverloadThreshold = Duration(seconds: 30);
 
+/// Предел ожидания начала ответа — от конца отправки (spec 7.7). Действует,
+/// только если адаптер отвечает потоком и в цепочке есть следующая модель.
+/// По живым проверкам ответ начинался не позже 127 с после отправки.
+const Duration responseStartLimit = Duration(seconds: 150);
+
+/// Предел срабатывает не позже момента, когда до потолка остаётся столько —
+/// время на следующую модель цепочки.
+const Duration fallbackReserve = Duration(seconds: 110);
+
 /// Паузы перед повтором после перегрузки — растут по ходу анализа.
 const List<Duration> overloadPauses = [
   Duration(seconds: 5),
@@ -68,6 +77,10 @@ enum AttemptReason {
 
   /// Запасная модель недоступна (404 и т. п.) — следующая.
   modelUnavailable,
+
+  /// Модель не начала отвечать (предел ожидания или обрыв до заголовков) —
+  /// следующая.
+  noResponse,
 }
 
 /// Что показать на экране анализа о повторе или смене модели.
@@ -234,6 +247,8 @@ class AnalysisPipeline {
     this.useFallbackModels,
     this.overloadHintRu,
     this.slowOverload = slowOverloadThreshold,
+    this.startLimit = responseStartLimit,
+    this.startReserve = fallbackReserve,
     Future<void> Function(Duration, CancelToken)? pause,
   })  : _pause = pause ?? _cancellableDelay,
         _validator = ReportValidator(data.criteria),
@@ -264,6 +279,11 @@ class AnalysisPipeline {
 
   /// Порог «медленного» 503 (в тестах — другой).
   final Duration slowOverload;
+
+  /// Предел ожидания начала ответа и резерв на следующую модель (в тестах —
+  /// другие).
+  final Duration startLimit;
+  final Duration startReserve;
 
   final Future<void> Function(Duration, CancelToken) _pause;
 
@@ -464,12 +484,46 @@ class AnalysisPipeline {
           timedOut = true;
           attemptCancel.cancel();
         });
+        // Предел ожидания начала ответа (spec 7.7): адаптер отвечает потоком
+        // и есть следующая модель. Отсчёт — с конца отправки; срабатывает не
+        // позже, чем до потолка останется резерв на следующую модель.
+        final limitStart = current.capabilities.streamsResponse &&
+            modelIndex + 1 < chain.length;
+        Timer? startTimer;
+        var answerStarted = false;
+        Duration? noResponseAfter;
+        void watchStart(AiProgress p) {
+          if (!limitStart) return;
+          if (p.phase == AiPhase.sending) {
+            // Новый HTTP-запрос (в т. ч. повтор адаптера без параметра).
+            startTimer?.cancel();
+            startTimer = null;
+            answerStarted = false;
+          } else if (p.phase == AiPhase.waiting) {
+            if (p.receivedBytes != null) {
+              answerStarted = true;
+              startTimer?.cancel();
+              startTimer = null;
+            } else if (!answerStarted && startTimer == null) {
+              final toReserve = timeLimit - startReserve - total.elapsed;
+              final wait = toReserve < startLimit ? toReserve : startLimit;
+              // Резерва уже нет — прерывать незачем, ждём до конца.
+              if (wait <= Duration.zero) return;
+              startTimer = Timer(wait, () {
+                noResponseAfter = wait;
+                attemptCancel.cancel();
+              });
+            }
+          }
+        }
+
         var raw = '';
         AiException? failed;
         try {
           final response = await current.analyze(
             request,
             onProgress: (p) {
+              watchStart(p);
               if (p.phase != AiPhase.sending) record.sendTime ??= sw.elapsed;
               onProgress(AnalysisProgress(
                 switch (p.phase) {
@@ -509,9 +563,17 @@ class AnalysisPipeline {
               'ответ не пришёл до потолка ${timeLimit.inSeconds} с',
             ]);
           }
-          rethrow;
+          final after = noResponseAfter;
+          if (after == null || cancel.isCancelled) rethrow;
+          final why = 'нет ответа за ${after.inSeconds} с после отправки — '
+              'прервано, следующая модель';
+          record
+            ..notes = [why]
+            ..error = 'noResponse: $why';
+          failed = AiException(AiErrorKind.noResponse, why);
         } finally {
           timer.cancel();
+          startTimer?.cancel();
           unawaited(userSub);
         }
         cancel.throwIfCancelled();
@@ -536,6 +598,10 @@ class AnalysisPipeline {
                     notice: AttemptNotice(reason: reason, model: current.model)));
                 continue;
               }
+            case AiErrorKind.noResponse:
+              // Как медленный 503: ту же модель не повторяем.
+              sawOverload = true;
+              reason = AttemptReason.noResponse;
             case AiErrorKind.rateLimit:
               reason = AttemptReason.rateLimit;
             case AiErrorKind.modelUnavailable when modelIndex > 0:
@@ -548,7 +614,9 @@ class AnalysisPipeline {
           if (modelIndex + 1 >= chain.length) {
             throw exhausted(chain.length > 1
                 ? 'все модели цепочки перегружены или недоступны'
-                : 'повторы не помогли');
+                : e.kind == AiErrorKind.noResponse
+                    ? 'сервер не начал отвечать'
+                    : 'повторы не помогли');
           }
           final failedModel = current.model;
           modelIndex++;

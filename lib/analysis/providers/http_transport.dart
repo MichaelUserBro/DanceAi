@@ -82,8 +82,10 @@ class HttpResult {
 
 /// Транспорт: в приложении — [IoHttpTransport], в тестах — подделка.
 abstract interface class HttpTransport {
-  /// Бросает [AiException] (network) при сбое сети или таймауте и
-  /// [AnalysisCancelled] при отмене. HTTP-ошибки — обычный [HttpResult].
+  /// Бросает [AiException] (network) при сбое сети или таймауте,
+  /// [AiException] (noResponse), если сервер закрыл соединение после полной
+  /// отправки, не прислав заголовков, и [AnalysisCancelled] при отмене.
+  /// HTTP-ошибки — обычный [HttpResult].
   Future<HttpResult> send(
     HttpCall call, {
     required CancelToken cancel,
@@ -119,6 +121,10 @@ class IoHttpTransport implements HttpTransport {
       ..connectionTimeout = connectTimeout
       ..idleTimeout = const Duration(seconds: 15);
     HttpClientRequest? request;
+    // Запрос отправлен целиком / пришли заголовки ответа: обрыв между этими
+    // моментами — сервер не начал отвечать (spec 7.7), а не сбой сети.
+    var uploaded = false;
+    var gotHeaders = false;
     final cancelSub = cancel.whenCancelled.then((_) {
       request?.abort(const AnalysisCancelled());
       client.close(force: true);
@@ -154,8 +160,10 @@ class IoHttpTransport implements HttpTransport {
         await write(call.body);
       }
       onUpload?.call(1);
+      uploaded = true;
 
       final response = await request.close().timeout(call.responseTimeout);
+      gotHeaders = true;
       final headersTime = clock.elapsed;
       Duration? firstByteTime;
       final ok = response.statusCode >= 200 && response.statusCode < 300;
@@ -204,7 +212,14 @@ class IoHttpTransport implements HttpTransport {
       if (cancel.isCancelled) throw const AnalysisCancelled();
       // Тип и текст ошибки, хост — без заголовков и параметров запроса
       // (ключ передаётся только в заголовке; query на всякий случай режем).
-      throw AiException(AiErrorKind.network, _describe(e, call.uri));
+      // Сервер закрыл соединение после полной отправки, не прислав
+      // заголовков («Connection closed before full header was received»), —
+      // noResponse. Нет сети, DNS, обрыв при отправке или после заголовков —
+      // network.
+      final kind = uploaded && !gotHeaders && e is HttpException
+          ? AiErrorKind.noResponse
+          : AiErrorKind.network;
+      throw AiException(kind, _describe(e, call.uri));
     } finally {
       unawaited(cancelSub);
       client.close(force: true);

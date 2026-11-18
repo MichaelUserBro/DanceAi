@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import '../app/app_version.dart';
 import '../data/app_data.dart';
+import '../report/overall_score.dart';
+import '../report/report.dart';
 import 'analysis_pipeline.dart';
 import 'video_preparer.dart';
 
@@ -60,10 +62,23 @@ Map<String, Object?> analysisExport(AnalysisTrace t, AppData data) {
     'attempts': [for (final a in t.attempts) a.toJson()],
     'validation_problems': t.problems,
     'failure': t.failure,
+    'overall_score': exportOverallScore(t, data),
     'report': t.reportJson,
     'raw_responses': t.responses,
     'notes': d.notes,
   };
+}
+
+/// Общая оценка, как на экране отчёта (spec 6); null — отчёта нет.
+double? exportOverallScore(AnalysisTrace t, AppData data) {
+  final json = t.reportJson;
+  if (json == null) return null;
+  try {
+    return overallScore(DanceReport.fromJson(json),
+        [for (final c in data.criteria.components) c.id]);
+  } catch (_) {
+    return null;
+  }
 }
 
 String analysisExportText(AnalysisTrace t, AppData data) =>

@@ -54,6 +54,7 @@ class GoogleProvider extends HttpAiProvider {
     maxVideoBytes: null,
     videoFpsConfigurable: true,
     thinkingConfigurable: true,
+    streamsResponse: true,
   );
 
   @override

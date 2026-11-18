@@ -13,6 +13,9 @@ import 'package:dance_ai/analysis/quota_time.dart';
 import 'package:dance_ai/analysis/temp_storage.dart';
 import 'package:dance_ai/analysis/video_preparer.dart';
 import 'package:dance_ai/data/providers_catalog.dart';
+import 'package:dance_ai/report/overall_score.dart';
+import 'package:dance_ai/report/report.dart';
+import 'package:dance_ai/ui/screens/analysis_screen.dart' show noticeText;
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test_data.dart';
@@ -54,10 +57,26 @@ class _Preparer implements VideoPreparer {
   }
 }
 
-/// Исходы попыток по моделям: String — ответ, AiException — ошибка.
+/// Отправлено, ответ не начинается, пока попытку не прервут.
+class _Silent {
+  const _Silent();
+}
+
+/// Отправлено; ответ [text] через [after]. [started] — первые байты потока
+/// приходят сразу (модель начала отвечать), иначе — только в конце.
+class _Late {
+  const _Late(this.text, this.after, {this.started = false});
+  final String text;
+  final Duration after;
+  final bool started;
+}
+
+/// Исходы попыток по моделям: String — ответ, AiException — ошибка,
+/// [_Silent] / [_Late] — ожидание ответа. [streams] — адаптер отвечает потоком.
 class _Models {
-  _Models(this.script);
+  _Models(this.script, {this.streams = false});
   final Map<String, List<Object>> script;
+  final bool streams;
   final calls = <(String model, AiRequest request)>[];
 
   _Provider provider(String model) => _Provider(this, model);
@@ -74,7 +93,8 @@ class _Provider implements AiProvider {
   String get displayName => 'Тест';
 
   @override
-  AiCapabilities get capabilities => const AiCapabilities(supportsVideo: true);
+  AiCapabilities get capabilities =>
+      AiCapabilities(supportsVideo: true, streamsResponse: models.streams);
 
   @override
   Future<ModelLookup?> lookupModel(CancelToken cancel) async => null;
@@ -89,6 +109,18 @@ class _Provider implements AiProvider {
     if (n > outcomes.length) fail('лишний запрос к $model');
     final a = outcomes[n - 1];
     if (a is AiException) throw a.withInfo(sentBytes: 100);
+    onProgress(const AiProgress(AiPhase.sending, 0));
+    onProgress(const AiProgress(AiPhase.waiting));
+    if (a is _Silent) {
+      await cancel.whenCancelled;
+      throw const AnalysisCancelled();
+    }
+    if (a is _Late) {
+      if (a.started) onProgress(const AiProgress(AiPhase.waiting, null, 10));
+      await Future.any([Future<void>.delayed(a.after), cancel.whenCancelled]);
+      cancel.throwIfCancelled();
+      return AiResponse(text: a.text, sentBytes: 100);
+    }
     return AiResponse(text: a as String, sentBytes: 100);
   }
 }
@@ -118,6 +150,8 @@ void main() {
     List<FallbackModel> fb = fallbacks,
     Duration timeLimit = analysisTimeLimit,
     Duration slowOverload = slowOverloadThreshold,
+    Duration startLimit = const Duration(milliseconds: 100),
+    Duration startReserve = fallbackReserve,
     bool realPause = false,
   }) {
     final pauses = <Duration>[];
@@ -132,6 +166,8 @@ void main() {
       overloadHintRu: 'квота Google обновляется в {{pacific_midnight_msk}} МСК',
       timeLimit: timeLimit,
       slowOverload: slowOverload,
+      startLimit: startLimit,
+      startReserve: startReserve,
       pause: realPause
           ? null
           : (d, c) async {
@@ -203,6 +239,10 @@ void main() {
     expect((attempts.last as Map)['model'], 'fb1');
     expect((attempts.last as Map)['reason'], 'overloaded');
     expect((attempts[1] as Map)['pause_ms'], 5000);
+    final ids = [for (final c in data.criteria.components) c.id];
+    expect(json['overall_score'],
+        overallScore(DanceReport.fromJson(loadExampleReportJson()), ids));
+    expect(json['overall_score'], isA<double>());
   });
 
   test('медленный 503 → сразу запасная, без повтора той же', () async {
@@ -359,6 +399,7 @@ void main() {
     await expectLater(run(x.pipeline, trace: trace), failure(FailureKind.overloaded));
     expect(trace.useFallbackModels, isFalse);
     expect(analysisExport(trace, data)['use_fallback_models'], isFalse);
+    expect(analysisExport(trace, data)['overall_score'], isNull);
     expect(m.calls, hasLength(2));
   });
 
@@ -386,6 +427,100 @@ void main() {
     final m = _Models({'main': ['{}', '{}']});
     await expectLater(
         run(make(m).pipeline), failure(FailureKind.invalidResponse));
+  });
+
+  group('ответ не начинается (spec 7.7)', () {
+    const slow = Duration(milliseconds: 400);
+
+    test('предел ожидания начала ответа → запасная, без повтора той же',
+        () async {
+      final m = _Models({
+        'main': [const _Silent()],
+        'fb1': [valid],
+      }, streams: true);
+      final x = make(m);
+      final trace = AnalysisTrace();
+      final progress = <AnalysisProgress>[];
+      final r = await run(x.pipeline, trace: trace, progress: progress);
+      expect(m.calls.map((c) => c.$1), ['main', 'fb1']);
+      expect(x.pauses, isEmpty);
+      expect(r.fallbackModel, 'fb1');
+      expect([for (final a in trace.attempts) a.reason],
+          [AttemptReason.first, AttemptReason.noResponse]);
+      expect(trace.attempts.first.error, startsWith('noResponse'));
+      expect(trace.attempts.first.notes.single, contains('нет ответа'));
+      final n = progress.map((p) => p.notice).nonNulls.single;
+      expect(noticeText(n), 'Модель main не отвечает, пробую запасную: fb1…');
+      final attempts = analysisExport(trace, data)['attempts'] as List;
+      expect((attempts.last as Map)['reason'], 'noResponse');
+    });
+
+    test('модель начала отвечать — предел не прерывает', () async {
+      final m = _Models({
+        'main': [_Late(valid, slow, started: true)],
+      }, streams: true);
+      final r = await run(make(m).pipeline);
+      expect(r.fallbackModel, isNull);
+      expect(m.calls, hasLength(1));
+    });
+
+    test('нет следующей модели — предела нет, ждём ответа', () async {
+      // Запасные выключены.
+      final m1 = _Models({'main': [_Late(valid, slow)]}, streams: true);
+      expect((await run(make(m1, fb: const []).pipeline)).fallbackModel,
+          isNull);
+      // Последняя модель цепочки.
+      final m2 = _Models({
+        'main': [_quota],
+        'fb1': [_Late(valid, slow)],
+      }, streams: true);
+      final r = await run(make(m2, fb: const [
+        FallbackModel(id: 'fb1', modes: both),
+      ]).pipeline);
+      expect(r.fallbackModel, 'fb1');
+    });
+
+    test('адаптер без потока — предела нет', () async {
+      final m = _Models({'main': [_Late(valid, slow)]});
+      final r = await run(make(m).pipeline);
+      expect(r.fallbackModel, isNull);
+      expect(m.calls, hasLength(1));
+    });
+
+    test('до потолка уже меньше резерва — не прерываем', () async {
+      final m = _Models({'main': [_Late(valid, slow)]}, streams: true);
+      final r = await run(
+          make(m, startReserve: analysisTimeLimit).pipeline);
+      expect(r.fallbackModel, isNull);
+    });
+
+    test('обрыв до заголовков (noResponse) → запасная', () async {
+      final m = _Models({
+        'main': [
+          const AiException(AiErrorKind.noResponse,
+              'HttpException: Connection closed before full header was received'),
+        ],
+        'fb1': [valid],
+      });
+      final x = make(m);
+      final trace = AnalysisTrace();
+      final r = await run(x.pipeline, trace: trace);
+      expect(r.fallbackModel, 'fb1');
+      expect(x.pauses, isEmpty);
+      expect(trace.attempts.last.reason, AttemptReason.noResponse);
+    });
+
+    test('обрыв до заголовков без запасных → «перегружен», не ошибка сети',
+        () async {
+      final m = _Models({
+        'main': [const AiException(AiErrorKind.noResponse, 'closed')],
+      });
+      final trace = AnalysisTrace();
+      await expectLater(run(make(m, fb: const []).pipeline, trace: trace),
+          failure(FailureKind.overloaded));
+      expect(m.calls, hasLength(1));
+      expect(trace.failure, contains('сервер не начал отвечать'));
+    });
   });
 
   group('providers.json: fallback_models', () {

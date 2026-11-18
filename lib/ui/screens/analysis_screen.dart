@@ -519,6 +519,8 @@ String noticeText(AttemptNotice n) {
       'У модели ${n.model} исчерпан лимит запросов, пробую запасную: $next…',
     AttemptReason.modelUnavailable =>
       'Модель ${n.model} недоступна, пробую запасную: $next…',
+    AttemptReason.noResponse =>
+      'Модель ${n.model} не отвечает, пробую запасную: $next…',
     _ => 'Модель ${n.model} перегружена, пробую запасную: $next…',
   };
 }
