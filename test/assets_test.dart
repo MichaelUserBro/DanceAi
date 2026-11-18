@@ -260,6 +260,8 @@ void main() {
       final system =
           File('assets/prompts/analysis_system.md').readAsStringSync();
       expect(system, contains('Время (таймкоды, м:сс) не указывай.'));
+      expect(system,
+          contains('Время (таймкоды, м:сс, секунды) не указывай нигде в ответе'));
       // Метки времени кадров остаются — для сопоставления с музыкой.
       expect(File('assets/prompts/input_frames.md').readAsStringSync(),
           contains('t=12.50'));

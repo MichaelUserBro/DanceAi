@@ -48,6 +48,8 @@ class ProviderInfo {
     this.modelHintRu,
     this.fallbackModels = const [],
     this.overloadHintRu,
+    this.videoDefault = false,
+    this.expectedSec = const {},
   });
 
   factory ProviderInfo.fromJson(Map<String, dynamic> json) => ProviderInfo(
@@ -67,7 +69,26 @@ class ProviderInfo {
             FallbackModel.fromJson(f as Map<String, dynamic>),
         ],
         overloadHintRu: json['overload_hint_ru'] as String?,
+        videoDefault: json['video_default'] as bool? ?? false,
+        expectedSec: _expected(json['expected_sec']),
       );
+
+  /// `expected_sec`: {"default": {режим: с}, "models": {модель: {режим: с}}}
+  /// → {модель или "*": {режим: с}}.
+  static Map<String, Map<String, int>> _expected(Object? json) {
+    if (json is! Map) return const {};
+    Map<String, int> modes(Object? m) => {
+          if (m is Map)
+            for (final e in m.entries)
+              if (e.value is num) '${e.key}': (e.value as num).round(),
+        };
+    final models = json['models'];
+    return {
+      if (json['default'] != null) '*': modes(json['default']),
+      if (models is Map)
+        for (final e in models.entries) '${e.key}': modes(e.value),
+    };
+  }
 
   factory ProviderInfo.customFromJson(Map<String, dynamic> json) =>
       ProviderInfo(
@@ -109,6 +130,22 @@ class ProviderInfo {
   /// Дополнение к ошибке «Сервер ИИ перегружен» (`overload_hint_ru`);
   /// `{{pacific_midnight_msk}}` — полночь по тихоокеанскому времени в МСК.
   final String? overloadHintRu;
+
+  /// «Модель принимает видео со звуком» включено по умолчанию, если
+  /// пользователь сам не выбирал (`video_default`).
+  final bool videoDefault;
+
+  /// Ожидаемое время ответа по модели и режиму, с (`expected_sec`; ключ
+  /// `*` — для незнакомой модели).
+  final Map<String, Map<String, int>> expectedSec;
+
+  /// Ожидаемое время ответа модели в режиме `frames` / `video`; null — нет
+  /// данных (пайплайн берёт своё значение по умолчанию).
+  Duration? expectedTime(String model, String mode) {
+    final m = model.startsWith('models/') ? model.substring(7) : model;
+    final s = expectedSec[m]?[mode] ?? expectedSec['*']?[mode];
+    return s == null ? null : Duration(seconds: s);
+  }
 }
 
 class ProvidersCatalog {

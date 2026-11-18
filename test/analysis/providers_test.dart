@@ -1056,6 +1056,219 @@ void main() {
     );
   });
 
+  group('ошибки: регион, квота 429 (Google), полный текст', () {
+    final longTail = 'x' * 900;
+    HttpResult google429(String quotaId, String delay) => jsonResult(429, {
+          'error': {
+            'code': 429,
+            'status': 'RESOURCE_EXHAUSTED',
+            'message': 'You exceeded your current quota. * Quota exceeded for '
+                'metric: generativelanguage.googleapis.com/'
+                'generate_content_free_tier_requests, limit: 20, model: '
+                'gemini-3.6-flash $longTail',
+            'details': [
+              {
+                '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+                'violations': [
+                  {
+                    'quotaMetric': 'generativelanguage.googleapis.com/'
+                        'generate_content_free_tier_requests',
+                    'quotaId': quotaId,
+                  }
+                ]
+              },
+              {'@type': 'type.googleapis.com/google.rpc.Help'},
+              {
+                '@type': 'type.googleapis.com/google.rpc.RetryInfo',
+                'retryDelay': delay,
+              },
+            ],
+          }
+        });
+
+    test('400 FAILED_PRECONDITION «User location is not supported» → '
+        'regionBlocked, не modelUnavailable', () {
+      final e = httpError(
+          jsonResult(400, {
+            'error': {
+              'code': 400,
+              'status': 'FAILED_PRECONDITION',
+              'message': 'User location is not supported for the API use.',
+            }
+          }),
+          key: _key);
+      expect(e.kind, AiErrorKind.regionBlocked);
+      final f = AnalysisFailure.fromAi(e, providerName: 'Google');
+      expect(f.kind, FailureKind.regionBlocked);
+      expect(f.title, 'Google не работает из вашей страны');
+      expect(f.actions, [FailureAction.retry]);
+    });
+
+    test('429 дневной квоты: вид, id, пауза из details; полный текст не '
+        'обрезан, короткий — обрезан', () async {
+      final http = FakeHttp((c, i) =>
+          google429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', '37s'));
+      final p = GoogleProvider(
+          model: 'gemini-3.6-flash',
+          apiKey: _key,
+          baseUrl: 'https://g.test',
+          transport: http);
+      AiException? e;
+      try {
+        await p.analyze(req(frames), onProgress: (_) {}, cancel: CancelToken());
+      } on AiException catch (x) {
+        e = x;
+      }
+      expect(e!.kind, AiErrorKind.rateLimit);
+      expect(e.quota, QuotaScope.day);
+      expect(e.quotaId, 'GenerateRequestsPerDayPerProjectPerModel-FreeTier');
+      expect(e.retryAfter, const Duration(seconds: 37));
+      expect(e.detail, endsWith('…'));
+      expect(e.fullDetail, contains(longTail));
+      expect(e.fullDetail, isNot(contains(_key)));
+    });
+
+    test('429 поминутной квоты: дробная пауза', () {
+      final q = GoogleProvider.googleQuota(jsonDecode(utf8.decode(google429(
+              'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', '12.5s')
+          .body)));
+      expect(q.scope, QuotaScope.minute);
+      expect(q.retryDelay, const Duration(milliseconds: 12500));
+    });
+
+    test('429 без details — квота неизвестна', () {
+      final q = GoogleProvider.googleQuota({
+        'error': {'code': 429, 'message': 'quota'}
+      });
+      expect(q.scope, isNull);
+      expect(q.retryDelay, isNull);
+    });
+
+    test('429 ошибкой внутри потока SSE — тот же разбор квоты', () async {
+      final body = google429(
+          'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', '30s');
+      final http = FakeHttp((c, i) => textResult(
+          200, 'data: ${utf8.decode(body.body)}\n\n'));
+      final p = GoogleProvider(
+          model: 'm', apiKey: _key, baseUrl: 'https://g.test', transport: http);
+      await expectLater(
+          p.analyze(req(frames), onProgress: (_) {}, cancel: CancelToken()),
+          throwsA(isA<AiException>()
+              .having((e) => e.quota, 'quota', QuotaScope.minute)
+              .having((e) => e.retryAfter, 'delay', const Duration(seconds: 30))));
+    });
+  });
+
+  group('предварительная проверка Google (countTokens)', () {
+    Future<PrecheckResult> check(HttpResult r) => GoogleProvider(
+            model: 'gemini-3.6-flash',
+            apiKey: _key,
+            baseUrl: 'https://g.test',
+            transport: FakeHttp((c, i) {
+              expect(c.uri.path,
+                  '/v1beta/models/gemini-3.6-flash:countTokens');
+              expect(c.method, 'POST');
+              return r;
+            }))
+        .precheck(CancelToken());
+
+    test('всё в порядке — без ошибки, статус и время', () async {
+      final r = await check(jsonResult(200, {'totalTokens': 1}));
+      expect(r.error, isNull);
+      expect(r.status, 200);
+      expect(r.request, 'POST models/gemini-3.6-flash:countTokens');
+      expect(r.toJson()['time_ms'], isA<int>());
+    });
+
+    test('неверный ключ (400 API_KEY_INVALID) → invalidKey', () async {
+      final r = await check(jsonResult(400, {
+        'error': {
+          'code': 400,
+          'status': 'INVALID_ARGUMENT',
+          'message': 'API key not valid. Please pass a valid API key.',
+        }
+      }));
+      expect(r.error!.kind, AiErrorKind.invalidKey);
+      expect(jsonEncode(r.toJson()), isNot(contains(_key)));
+    });
+
+    test('неизвестная модель (404) → modelUnavailable', () async {
+      final r = await check(jsonResult(404, {
+        'error': {'code': 404, 'status': 'NOT_FOUND', 'message': 'not found'}
+      }));
+      expect(r.error!.kind, AiErrorKind.modelUnavailable);
+    });
+
+    test('регион → regionBlocked', () async {
+      final r = await check(jsonResult(400, {
+        'error': {
+          'status': 'FAILED_PRECONDITION',
+          'message': 'User location is not supported for the API use.',
+        }
+      }));
+      expect(r.error!.kind, AiErrorKind.regionBlocked);
+    });
+  });
+
+  test('IoHttpTransport: недопустимый символ в ключе → keyFormat до '
+      'подключения, без ключа в тексте, 0 байт', () async {
+    var connected = false;
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    server.listen((s) {
+      connected = true;
+      s.destroy();
+    });
+    const badKey = 'AIzaSyАБВ-secret-1234567890'; // кириллица
+    await expectLater(
+      IoHttpTransport().send(
+          HttpCall.json('POST', Uri.parse('http://127.0.0.1:${server.port}/x'),
+              {'a': 1},
+              headers: {'x-goog-api-key': badKey}),
+          cancel: CancelToken()),
+      throwsA(isA<AiException>()
+          .having((e) => e.kind, 'kind', AiErrorKind.keyFormat)
+          .having((e) => e.detail, 'detail', contains('U+0410'))
+          .having((e) => e.detail, 'detail', contains('x-goog-api-key'))
+          .having((e) => e.toString(), 'text', isNot(contains('secret')))
+          .having((e) => e.sentBytes, 'sent', 0)),
+    );
+    expect(connected, isFalse);
+    expect(AnalysisFailure.fromAi(
+            const AiException(AiErrorKind.keyFormat)).title,
+        'В ключе API недопустимые символы');
+  });
+
+  test('IoHttpTransport: невидимый символ в обычном заголовке → '
+      'requestFormat, не «нет связи»', () async {
+    await expectLater(
+      IoHttpTransport().send(
+          HttpCall(
+              method: 'GET',
+              uri: Uri.parse('http://127.0.0.1:9/x'),
+              headers: {'x-custom': 'a​b'}),
+          cancel: CancelToken()),
+      throwsA(isA<AiException>()
+          .having((e) => e.kind, 'kind', AiErrorKind.requestFormat)),
+    );
+  });
+
+  test('адаптер: ключ с переносом строки посередине → keyFormat, отправлено '
+      '0 байт (а не размер тела)', () async {
+    final p = GoogleProvider(
+        model: 'm',
+        apiKey: 'AIza-part1\npart2',
+        baseUrl: 'http://127.0.0.1:9',
+        transport: IoHttpTransport());
+    await expectLater(
+      p.analyze(req(frames), onProgress: (_) {}, cancel: CancelToken()),
+      throwsA(isA<AiException>()
+          .having((e) => e.kind, 'kind', AiErrorKind.keyFormat)
+          .having((e) => e.sentBytes, 'sent', 0)
+          .having((e) => '$e ${e.notes}', 'text', isNot(contains('part2')))),
+    );
+  });
+
   test('IoHttpTransport: нет сервера → network без подробностей запроса', () async {
     final s = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = s.port;

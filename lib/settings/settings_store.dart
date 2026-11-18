@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../analysis/adapter_registry.dart';
 import '../analysis/stub_ai_provider.dart';
 import '../data/providers_catalog.dart';
+import 'api_key_check.dart';
 import 'secure_key_store.dart';
 
 /// Обычные (не секретные) настройки.
@@ -102,7 +103,8 @@ class SettingsStore extends ChangeNotifier {
     for (final p in catalog.all) {
       final model = await _prefs.getString(_kModel(p.id));
       if (model != null) _models[p.id] = model;
-      _videoMode[p.id] = await _prefs.getBool(_kVideo(p.id)) ?? false;
+      // Не выбирал сам — значение провайдера (`video_default`).
+      _videoMode[p.id] = await _prefs.getBool(_kVideo(p.id)) ?? p.videoDefault;
       final mf = int.tryParse(await _prefs.getString(_kMaxFrames(p.id)) ?? '');
       if (mf != null) _maxFrames[p.id] = mf;
       _useFallback[p.id] = await _prefs.getBool(_kFallback(p.id)) ?? true;
@@ -227,14 +229,19 @@ class SettingsStore extends ChangeNotifier {
 
   Future<String?> readKey(String providerId) => keys.read(providerId);
 
-  Future<void> saveKey(String providerId, String key) async {
-    final trimmed = key.trim();
-    if (trimmed.isEmpty) {
+  /// Сохраняет ключ после очистки ([checkApiKey]). Ключ с недопустимыми
+  /// символами не сохраняется — возвращается текст для пользователя.
+  Future<String?> saveKey(String providerId, String key) async {
+    final check = checkApiKey(key);
+    if (!check.ok) return apiKeyBadCharsRu;
+    final clean = check.key;
+    if (clean.isEmpty) {
       await keys.delete(providerId);
     } else {
-      await keys.write(providerId, trimmed);
+      await keys.write(providerId, clean);
     }
-    _hasKey[providerId] = trimmed.isNotEmpty;
+    _hasKey[providerId] = clean.isNotEmpty;
     notifyListeners();
+    return null;
   }
 }

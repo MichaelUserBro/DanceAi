@@ -55,7 +55,10 @@ class HttpCall {
 
 class HttpResult {
   const HttpResult(this.status, this.headers, this.body,
-      {this.headersTime, this.firstByteTime});
+      {this.headersTime, this.firstByteTime, this.sentBytes});
+
+  /// Сколько байт тела запроса фактически отправлено.
+  final int? sentBytes;
 
   /// Когда пришли заголовки и первый байт тела (от начала запроса).
   final Duration? headersTime;
@@ -84,8 +87,10 @@ class HttpResult {
 abstract interface class HttpTransport {
   /// Бросает [AiException] (network) при сбое сети или таймауте,
   /// [AiException] (noResponse), если сервер закрыл соединение после полной
-  /// отправки, не прислав заголовков, и [AnalysisCancelled] при отмене.
-  /// HTTP-ошибки — обычный [HttpResult].
+  /// отправки, не прислав заголовков, [AiException] (keyFormat /
+  /// requestFormat), если значение заголовка недопустимо (запрос не уходит),
+  /// и [AnalysisCancelled] при отмене. В [AiException.sentBytes] — сколько
+  /// байт тела фактически ушло. HTTP-ошибки — обычный [HttpResult].
   Future<HttpResult> send(
     HttpCall call, {
     required CancelToken cancel,
@@ -116,6 +121,19 @@ class IoHttpTransport implements HttpTransport {
     void Function(int receivedBytes)? onReceive,
   }) async {
     cancel.throwIfCancelled();
+    // Заголовки проверяем до подключения: недопустимый символ (обычно в
+    // ключе) — понятная ошибка без значения заголовка, а не «нет связи».
+    for (final e in call.headers.entries) {
+      final bad = invalidHeaderChar(e.value);
+      if (bad == null) continue;
+      final name = e.key.toLowerCase();
+      final hex = e.value.codeUnitAt(bad).toRadixString(16).toUpperCase();
+      throw AiException(
+        keyHeaders.contains(name) ? AiErrorKind.keyFormat : AiErrorKind.requestFormat,
+        'заголовок $name: недопустимый символ U+${hex.padLeft(4, '0')} '
+            'в позиции ${bad + 1} (длина ${e.value.length})',
+      ).withInfo(sentBytes: 0);
+    }
     final clock = Stopwatch()..start();
     final client = HttpClient()
       ..connectionTimeout = connectTimeout
@@ -125,6 +143,7 @@ class IoHttpTransport implements HttpTransport {
     // моментами — сервер не начал отвечать (spec 7.7), а не сбой сети.
     var uploaded = false;
     var gotHeaders = false;
+    var sent = 0;
     final cancelSub = cancel.whenCancelled.then((_) {
       request?.abort(const AnalysisCancelled());
       client.close(force: true);
@@ -140,7 +159,6 @@ class IoHttpTransport implements HttpTransport {
       request.contentLength = length;
 
       // Тело частями: доля отправленного — для прогресса «Отправка».
-      var sent = 0;
       Future<void> write(List<int> data) async {
         for (var i = 0; i < data.length; i += _chunk) {
           cancel.throwIfCancelled();
@@ -205,7 +223,9 @@ class IoHttpTransport implements HttpTransport {
         headers[name.toLowerCase()] = values.join(', ');
       });
       return HttpResult(response.statusCode, headers, b.takeBytes(),
-          headersTime: headersTime, firstByteTime: firstByteTime);
+          headersTime: headersTime,
+          firstByteTime: firstByteTime,
+          sentBytes: sent);
     } on AnalysisCancelled {
       rethrow;
     } catch (e) {
@@ -216,20 +236,45 @@ class IoHttpTransport implements HttpTransport {
       // заголовков («Connection closed before full header was received»), —
       // noResponse. Нет сети, DNS, обрыв при отправке или после заголовков —
       // network.
-      final kind = uploaded && !gotHeaders && e is HttpException
-          ? AiErrorKind.noResponse
-          : AiErrorKind.network;
-      throw AiException(kind, _describe(e, call.uri));
+      final kind = switch (e) {
+        HttpException() when uploaded && !gotHeaders => AiErrorKind.noResponse,
+        // Значение заголовка или URL не собрались — это не сеть.
+        FormatException() => AiErrorKind.requestFormat,
+        _ => AiErrorKind.network,
+      };
+      throw AiException(kind, _describe(e, call.uri))
+          .withInfo(sentBytes: sent);
     } finally {
       unawaited(cancelSub);
       client.close(force: true);
     }
   }
 
+  /// Заголовки, в которых передаётся ключ API.
+  static const keyHeaders = {
+    'x-goog-api-key',
+    'authorization',
+    'x-api-key',
+    'api-key',
+  };
+
+  /// Позиция первого символа, недопустимого в значении заголовка HTTP
+  /// (dart:io: только 0x20–0x7E и табуляция); null — всё допустимо.
+  static int? invalidHeaderChar(String value) {
+    for (var i = 0; i < value.length; i++) {
+      final c = value.codeUnitAt(i);
+      if (!((c > 31 && c < 127) || c == 9)) return i;
+    }
+    return null;
+  }
+
   static String _describe(Object e, Uri uri) {
     if (e is TimeoutException) return 'таймаут (${uri.host})';
     var msg = switch (e) {
       HttpException(:final message) => message,
+      // Текст FormatException содержит само значение (например, ключ) —
+      // берём только его начало до значения.
+      FormatException(:final message) => message.split(':').first,
       SocketException(:final message, :final osError) =>
         '$message${osError == null ? '' : ' (${osError.message})'}',
       TlsException(:final message) => message,

@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated": "2026-11-17",
+  "updated": "2026-11-19",
   "note": "Провайдеры ИИ равноправны: порядок в интерфейсе — алфавитный по name, без рекомендаций и приоритета. api_type определяет адаптер. recommended_models пока пусты — заполняются по итогам проверки на эталонном наборе. Модель пользователь вводит вручную. verified_live: false — адаптер проверен только по документации и тестам; в настройках пометка «не проверено вживую».",
   "providers": [
     {
@@ -34,6 +34,15 @@
       "free_note_ru": "Есть бесплатный уровень с лимитами; на нём данные могут использоваться Google.",
       "model_hint_ru": "Проверена модель gemini-3.6-flash. У gemini-3.8-flash на бесплатном тарифе очень маленький лимит запросов.",
       "overload_hint_ru": "квота Google обновляется в {{pacific_midnight_msk}} МСК",
+      "video_default": true,
+      "expected_sec": {
+        "default": { "frames": 150, "video": 110 },
+        "models": {
+          "gemini-3.6-flash": { "frames": 150, "video": 105 },
+          "gemini-3-flash-preview": { "frames": 110, "video": 70 },
+          "gemini-4-hydrogen": { "frames": 250, "video": 250 }
+        }
+      },
       "fallback_models": [
         { "id": "gemini-3.6-flash", "modes": ["frames", "video"] },
         { "id": "gemini-3-flash-preview", "modes": ["frames", "video"] },

@@ -508,9 +508,12 @@ class _PulsePainter extends CustomPainter {
 String noticeText(AttemptNotice n) {
   final next = n.nextModel;
   if (next == null) {
+    final pause = n.pause;
     return switch (n.reason) {
       AttemptReason.invalidResponse =>
         'Первый ответ ИИ не прошёл проверку — отправлен повторный запрос.',
+      AttemptReason.rateLimit => 'Лимит запросов модели ${n.model} в минуту — '
+          'жду${pause == null ? '' : ' ${pause.inSeconds} с'} и пробую ещё раз…',
       _ => 'Сервер ИИ перегружен, пробую ещё раз…',
     };
   }

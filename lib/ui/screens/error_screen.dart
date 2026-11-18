@@ -145,8 +145,11 @@ class ErrorScreen extends StatelessWidget {
   static IconData _icon(FailureKind k) => switch (k) {
         FailureKind.noAudio => Icons.volume_off_rounded,
         FailureKind.unreadableVideo => Icons.broken_image_outlined,
-        FailureKind.invalidKey || FailureKind.notConfigured =>
+        FailureKind.invalidKey ||
+        FailureKind.keyFormat ||
+        FailureKind.notConfigured =>
           Icons.key_off_rounded,
+        FailureKind.regionBlocked => Icons.public_off_rounded,
         FailureKind.rateLimit => Icons.hourglass_bottom_rounded,
         FailureKind.network => Icons.wifi_off_rounded,
         FailureKind.tooLarge || FailureKind.videoTooLarge =>

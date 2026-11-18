@@ -79,10 +79,19 @@ AiException httpError(HttpResult r, {required String? key, bool freeTier = false
   final msg = errorMessage(r);
   final lower = msg.toLowerCase();
   final detail = redact('HTTP ${r.status}: ${_short(msg)}', key);
+  // Полный текст — для JSON (spec 7.8); тело ответа целиком, если это не
+  // JSON-ошибка. Ограничение — от мусорных многомегабайтных ответов.
+  final full = redact(
+      'HTTP ${r.status}: ${_short(r.json is Map ? msg : r.text, maxFullError)}',
+      key);
   bool has(List<String> words) => words.any(lower.contains);
 
   final AiErrorKind kind;
-  if (r.status == 401 ||
+  if (has(['user location is not supported'])) {
+    // Google: 400 FAILED_PRECONDITION — сервис недоступен из страны
+    // пользователя; не «модель недоступна».
+    kind = AiErrorKind.regionBlocked;
+  } else if (r.status == 401 ||
       has(['api_key_invalid', 'api key not valid', 'invalid api key',
           'incorrect api key', 'invalid x-api-key', 'authentication'])) {
     kind = AiErrorKind.invalidKey;
@@ -117,13 +126,17 @@ AiException httpError(HttpResult r, {required String? key, bool freeTier = false
   } else {
     kind = AiErrorKind.server;
   }
-  return AiException(
+  return AiException.full(
     kind,
-    detail,
-    kind == AiErrorKind.rateLimit ? retryAfter(r) : null,
-    kind == AiErrorKind.rateLimit && freeTier,
+    detail: detail,
+    retryAfter: kind == AiErrorKind.rateLimit ? retryAfter(r) : null,
+    freeTier: kind == AiErrorKind.rateLimit && freeTier,
+    fullDetail: full,
   );
 }
+
+/// Предел полного текста ошибки в JSON, символов.
+const int maxFullError = 8000;
 
 /// Ошибка 400 из-за уровня «размышления»: модель не поддерживает параметр.
 bool isThinkingRejected(HttpResult r) {

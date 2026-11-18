@@ -212,6 +212,11 @@ void main() {
                 '${a.error == null ? '' : ', ${a.error}'}',
         ].join('; ');
         print('LIVE    этапы, с: $prep | $attempts');
+        final pre = t.precheck;
+        final up = t.upload;
+        print('LIVE    проверка: ${pre == null ? '—' : '${pre.request} HTTP ${pre.status ?? '—'} ${sec(pre.time)} с${pre.error == null ? '' : ' ${pre.error!.kind.name}'}'}'
+            ' | материал: ${up == null ? '—' : '${up.toJson()['upload_mode']}, загрузка ${sec(up.uploadTime)} с, ACTIVE ${sec(up.activeWait)} с'}'
+            ' | ИИ ${sec(t.aiTime)} с${t.chainNotes.isEmpty ? '' : ' | ${t.chainNotes.join('; ')}'}');
         if (_outDir.isNotEmpty) {
           final out = File('$_outDir/${analysisExportFileName(t)}');
           await out.writeAsString(analysisExportText(t, data));

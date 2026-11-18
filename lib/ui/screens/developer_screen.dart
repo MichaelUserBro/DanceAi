@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../analysis/ai_provider.dart';
 import '../../analysis/analysis_export.dart';
 import '../../analysis/analysis_pipeline.dart';
 import '../../analysis/music/music_analyzer.dart';
@@ -180,8 +181,15 @@ class DeveloperScreen extends StatelessWidget {
                                   (a) => a.reason == AttemptReason.invalidResponse)
                               ? 'был (первый ответ не прошёл проверку)'
                               : 'был (перегрузка или запасная модель)'),
+                  if (trace.precheck != null)
+                    _kv('Предварительная проверка', _precheck(trace.precheck!)),
+                  if (trace.upload != null)
+                    _kv('Материал', _upload(trace)),
                   for (final (i, a) in trace.attempts.indexed)
                     _kv('Запрос №${i + 1}', _attempt(a)),
+                  for (final n in trace.chainNotes) _kv('Цепочка', n),
+                  if (trace.aiTime != null)
+                    _kv('Обращение к ИИ (потолок)', _secs(trace.aiTime)),
                   if (trace.totalTime != null)
                     _kv('Всего до отчёта', _secs(trace.totalTime)),
                   if (trace.failure != null) _kv('Итог', trace.failure!),
@@ -244,6 +252,29 @@ class DeveloperScreen extends StatelessWidget {
           ? '—'
           : '${(d.inMilliseconds / 1000).toStringAsFixed(1).replaceAll('.', ',')} с';
 
+  static String _precheck(PrecheckResult p) => [
+        p.request,
+        if (p.status != null) 'HTTP ${p.status}',
+        _secs(p.time),
+        if (p.error != null) 'ошибка: ${p.error!.kind.name}',
+      ].join(' · ');
+
+  static String _upload(AnalysisTrace t) {
+    final u = t.upload!;
+    return [
+      switch (u.mode) {
+        UploadMode.fileApi => 'File API, один раз на анализ',
+        UploadMode.inline => 'в каждом запросе',
+        UploadMode.inlineFallback => 'в каждом запросе (загрузка не удалась)',
+      },
+      if (u.bytes != null) _size(u.bytes!),
+      if (u.uploadTime != null) 'загрузка ${_secs(u.uploadTime)}',
+      if (u.activeWait != null) 'ожидание ACTIVE ${_secs(u.activeWait)}',
+      ...u.notes,
+      ...t.uploadNotes,
+    ].join(' · ');
+  }
+
   static String _attempt(AiAttempt a) {
     final u = a.usage;
     final tokens = u == null
@@ -265,6 +296,7 @@ class DeveloperScreen extends StatelessWidget {
       ?tokens,
       if (a.finishReason != null) 'завершение ${a.finishReason}',
       ...a.notes,
+      if (a.quota != null) 'квота: ${a.quota == 'day' ? 'дневная' : 'поминутная'}',
       if (a.error != null) 'ошибка: ${a.error}',
     ].join(' · ');
   }

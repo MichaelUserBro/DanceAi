@@ -13,7 +13,9 @@ import 'prompt_builder.dart';
 import 'temp_storage.dart';
 import 'video_preparer.dart';
 
-/// Потолок на весь анализ вместе с повтором (spec 7.7). Меняется здесь.
+/// Потолок на обращение к ИИ — от загрузки материала или первого запроса,
+/// вместе со всеми повторами и запасными моделями (spec 7.7). Проверка
+/// видео, сжатие и анализ музыки в него не входят. Меняется здесь.
 const Duration analysisTimeLimit = Duration(minutes: 5);
 
 /// Повтор после невалидного ответа запускается, только если до потолка
@@ -32,9 +34,43 @@ const Duration slowOverloadThreshold = Duration(seconds: 30);
 /// По живым проверкам ответ начинался не позже 127 с после отправки.
 const Duration responseStartLimit = Duration(seconds: 150);
 
-/// Предел срабатывает не позже момента, когда до потолка остаётся столько —
-/// время на следующую модель цепочки.
-const Duration fallbackReserve = Duration(seconds: 110);
+/// Ожидаемое время ответа модели, если в providers.json (`expected_sec`)
+/// нет данных.
+const Duration defaultExpectedFrames = Duration(seconds: 150);
+const Duration defaultExpectedVideo = Duration(seconds: 110);
+
+/// Запас к ожидаемому времени следующей модели (плюс время отправки).
+const Duration reserveMargin = Duration(seconds: 10);
+
+/// Раньше 150 с текущую модель можно прервать ради следующей, только если
+/// она уже ждала столько своих ожидаемых времён («честный шанс»).
+const double fairChance = 1.25;
+
+/// Следующая модель запускается, только если до потолка осталось не меньше
+/// этой доли её ожидаемого времени (и не меньше [minAttemptTime]).
+const double startShare = 0.8;
+
+/// Когда прервать ожидание начала ответа (от начала обращения к ИИ);
+/// null — не прерывать (следующей модели заведомо не хватит времени).
+/// [sendEnd] — конец отправки текущей попытки, [sendTime] — сколько заняла
+/// отправка (следующей модели понадобится примерно столько же).
+Duration? startLimitAt({
+  required Duration sendEnd,
+  required Duration sendTime,
+  required Duration timeLimit,
+  required Duration startLimit,
+  required Duration currentExpected,
+  required Duration nextExpected,
+}) {
+  final need = nextExpected + sendTime + reserveMargin;
+  final regular = sendEnd + startLimit;
+  if (timeLimit - regular >= need) return regular;
+  // Раньше 150 с — только если текущая модель уже получила честный шанс.
+  final early = timeLimit - need;
+  final fair = sendEnd + currentExpected * fairChance;
+  if (early >= fair && early > sendEnd) return early;
+  return null;
+}
 
 /// Паузы перед повтором после перегрузки — растут по ходу анализа.
 const List<Duration> overloadPauses = [
@@ -85,7 +121,11 @@ enum AttemptReason {
 
 /// Что показать на экране анализа о повторе или смене модели.
 class AttemptNotice {
-  const AttemptNotice({required this.reason, required this.model, this.nextModel});
+  const AttemptNotice(
+      {required this.reason, required this.model, this.nextModel, this.pause});
+
+  /// Пауза перед повтором той же модели (поминутная квота).
+  final Duration? pause;
 
   final AttemptReason reason;
 
@@ -146,6 +186,13 @@ class AiAttempt {
   /// Ошибка API (без ключа).
   String? error;
 
+  /// Полный текст ошибки провайдера (без ключа, до 8000 символов).
+  String? errorFull;
+
+  /// 429: вид квоты (`minute` / `day`) и её id.
+  String? quota;
+  String? quotaId;
+
   Map<String, Object?> toJson() => {
         'retry': retry,
         'model': model,
@@ -162,6 +209,9 @@ class AiAttempt {
         'finish_reason': finishReason,
         'notes': notes,
         'error': error,
+        'error_full': errorFull,
+        'quota': quota,
+        'quota_id': quotaId,
       };
 }
 
@@ -197,6 +247,22 @@ class AnalysisTrace {
   int? maxFramesSetting;
   DateTime? startedAt;
   Duration? totalTime;
+
+  /// Время обращения к ИИ (от загрузки или первого запроса) — потолок
+  /// считается от него.
+  Duration? aiTime;
+
+  /// Предварительная проверка (ключ, модель, страна) — параллельно с
+  /// подготовкой видео.
+  PrecheckResult? precheck;
+
+  /// Как ушёл материал (один раз через File API или в каждой попытке) и
+  /// заметки об удалении загруженного файла.
+  SharedMaterial? upload;
+  final List<String> uploadNotes = [];
+
+  /// Почему модели цепочки пропущены (не хватает времени).
+  final List<String> chainNotes = [];
   final List<AiAttempt> attempts = [];
 
   /// Итоговый отчёт (как его вернула модель, после проверки).
@@ -248,7 +314,7 @@ class AnalysisPipeline {
     this.overloadHintRu,
     this.slowOverload = slowOverloadThreshold,
     this.startLimit = responseStartLimit,
-    this.startReserve = fallbackReserve,
+    this.expectedTime,
     Future<void> Function(Duration, CancelToken)? pause,
   })  : _pause = pause ?? _cancellableDelay,
         _validator = ReportValidator(data.criteria),
@@ -280,10 +346,12 @@ class AnalysisPipeline {
   /// Порог «медленного» 503 (в тестах — другой).
   final Duration slowOverload;
 
-  /// Предел ожидания начала ответа и резерв на следующую модель (в тестах —
-  /// другие).
+  /// Предел ожидания начала ответа (в тестах — другой).
   final Duration startLimit;
-  final Duration startReserve;
+
+  /// Ожидаемое время ответа модели в режиме (providers.json, `expected_sec`);
+  /// null — значения по умолчанию.
+  final Duration? Function(String model, SubmissionMode mode)? expectedTime;
 
   final Future<void> Function(Duration, CancelToken) _pause;
 
@@ -322,6 +390,14 @@ class AnalysisPipeline {
         ? SubmissionMode.video
         : SubmissionMode.frames;
     final total = Stopwatch()..start();
+    // Потолок — от начала обращения к ИИ (загрузка материала или первый
+    // запрос), без проверки видео, сжатия и анализа музыки (spec 7.7).
+    final ai = Stopwatch();
+    Duration expected(String model) =>
+        expectedTime?.call(model, mode) ??
+        (mode == SubmissionMode.video
+            ? defaultExpectedVideo
+            : defaultExpectedFrames);
     trace
       ?..providerName = provider.displayName
       ..model = provider.model
@@ -336,9 +412,32 @@ class AnalysisPipeline {
       ..maxFramesSetting = maxFrames
       ..useFallbackModels = useFallbackModels;
     Directory? workDir;
+    AiSharedMaterial? sharer;
+    SharedMaterial? shared;
     try {
       workDir = await tempStorage.createWorkDir();
       cancel.throwIfCancelled();
+
+      // Предварительная проверка (ключ, модель, страна) — параллельно с
+      // подготовкой; фатальный ответ отменяет подготовку сразу.
+      final prepCancel = CancelToken();
+      unawaited(cancel.whenCancelled.then((_) => prepCancel.cancel()));
+      AiException? fatal;
+      Future<void>? precheck;
+      final p = provider;
+      if (p is AiPrecheck && !demo) {
+        precheck = (p as AiPrecheck).precheck(prepCancel).then((r) {
+          trace?.precheck = r;
+          final e = r.error;
+          if (e != null && _precheckFatal.contains(e.kind)) {
+            fatal = e;
+            prepCancel.cancel();
+          }
+        }, onError: (Object _) {});
+      }
+      AnalysisFailure fatalFailure(AiException e) => AnalysisFailure.fromAi(e,
+          videoMode: mode == SubmissionMode.video,
+          providerName: provider.displayName);
 
       final PreparedMaterial material;
       try {
@@ -360,11 +459,20 @@ class AnalysisPipeline {
             },
             fraction: p.fraction,
           )),
-          cancel: cancel,
+          cancel: prepCancel,
         );
       } on PrepareException catch (e) {
         throw AnalysisFailure.fromPrepare(e);
+      } on AnalysisCancelled {
+        final f = fatal;
+        if (f != null && !cancel.isCancelled) throw fatalFailure(f);
+        rethrow;
       }
+      cancel.throwIfCancelled();
+      // Проверка ещё идёт — дождаться (у неё свой таймаут).
+      if (precheck != null) await precheck;
+      final f0 = fatal;
+      if (f0 != null) throw fatalFailure(f0);
       cancel.throwIfCancelled();
 
       // Облегчённая копия больше, чем может отправить адаптер.
@@ -415,10 +523,54 @@ class AnalysisPipeline {
       }
       trace?.modelChain = List.unmodifiable(chain);
 
+      // Обращение к ИИ начинается: отсюда — потолок.
+      ai.start();
+
+      // Материал — один раз на весь анализ (например, видео в File API):
+      // все попытки и модели цепочки используют его (spec 7.7).
+      if (p is AiSharedMaterial && !demo) {
+        sharer = p as AiSharedMaterial;
+        final upCancel = CancelToken();
+        final upSub = cancel.whenCancelled.then((_) => upCancel.cancel());
+        var upTimedOut = false;
+        final upTimer = Timer(timeLimit, () {
+          upTimedOut = true;
+          upCancel.cancel();
+        });
+        try {
+          shared = await sharer.prepareShared(
+            request,
+            onProgress: (p) => onProgress(AnalysisProgress(
+              p.phase == AiPhase.processing
+                  ? AnalysisStage.processing
+                  : AnalysisStage.sending,
+              fraction: p.phase == AiPhase.sending ? p.fraction : null,
+            )),
+            cancel: upCancel,
+          );
+        } on AiException catch (e) {
+          trace?.uploadNotes.addAll(e.notes);
+          throw fatalFailure(e);
+        } on AnalysisCancelled {
+          if (upTimedOut && !cancel.isCancelled) {
+            throw AnalysisFailure(FailureKind.timeLimit, details: [
+              'материал не загрузился до потолка ${timeLimit.inSeconds} с',
+            ]);
+          }
+          rethrow;
+        } finally {
+          upTimer.cancel();
+          unawaited(upSub);
+        }
+        trace?.upload = shared;
+        if (shared != null) request = request.withShared(shared.handle);
+      }
+
       final base = request;
       var current = provider;
       var modelIndex = 0;
       var sameModelRetried = false;
+      var quotaRetried = false;
       var correctionUsed = false;
       var pauseIndex = 0;
       var nextPause = Duration.zero;
@@ -426,24 +578,43 @@ class AnalysisPipeline {
       Duration? lastAnswerTime;
       AiException? lastError;
       var sawOverload = false;
+      var sawDailyQuota = false;
 
-      // Повторы и запасные исчерпаны (или на них нет времени).
+      // Повторы и запасные исчерпаны (или на них нет времени). Время сброса
+      // квоты — только если был 429 дневной квоты.
       AnalysisFailure exhausted(String why) {
         final video = mode == SubmissionMode.video;
+        final hint = sawDailyQuota ? overloadHintRu : null;
         if (sawOverload || lastError == null) {
           return AnalysisFailure(FailureKind.overloaded,
               details: [why, ?lastError?.detail],
-              hintRu: overloadHintRu,
+              hintRu: hint,
               videoMode: video,
               framesFallback: video && framesOnly.isNotEmpty);
         }
-        final f = AnalysisFailure.fromAi(lastError, videoMode: video);
+        final f = AnalysisFailure.fromAi(lastError,
+            videoMode: video, providerName: provider.displayName, hintRu: hint);
         return f.withDetails([why, ...f.details]);
+      }
+
+      // Следующая модель цепочки, которой хватает времени; пропущенные —
+      // в заметки. null — ни одной.
+      int? nextFitting() {
+        final remaining = timeLimit - ai.elapsed;
+        for (var i = modelIndex + 1; i < chain.length; i++) {
+          final share = expected(chain[i]) * startShare;
+          final need = share > minAttemptTime ? share : minAttemptTime;
+          if (remaining >= need) return i;
+          trace?.chainNotes.add('${chain[i]} пропущена: ожидается '
+              '${expected(chain[i]).inSeconds} с, до потолка '
+              '${remaining.inSeconds} с');
+        }
+        return null;
       }
 
       while (true) {
         final isRetry = nextReason == AttemptReason.invalidResponse;
-        var remaining = timeLimit - total.elapsed;
+        var remaining = timeLimit - ai.elapsed;
         if (nextReason == AttemptReason.invalidResponse) {
           // Исправляющий повтор — только если на него остаётся разумное время.
           final t = lastAnswerTime;
@@ -461,11 +632,11 @@ class AnalysisPipeline {
         }
         if (remaining <= Duration.zero) {
           throw const AnalysisFailure(FailureKind.timeLimit,
-              details: ['потолок исчерпан на подготовке']);
+              details: ['потолок исчерпан до первого запроса']);
         }
         if (nextPause > Duration.zero) {
           await _pause(nextPause, cancel);
-          remaining = timeLimit - total.elapsed;
+          remaining = timeLimit - ai.elapsed;
         }
         onProgress(AnalysisProgress(AnalysisStage.sending, isRetry: isRetry));
         final record = AiAttempt(
@@ -485,13 +656,16 @@ class AnalysisPipeline {
           attemptCancel.cancel();
         });
         // Предел ожидания начала ответа (spec 7.7): адаптер отвечает потоком
-        // и есть следующая модель. Отсчёт — с конца отправки; срабатывает не
-        // позже, чем до потолка останется резерв на следующую модель.
-        final limitStart = current.capabilities.streamsResponse &&
-            modelIndex + 1 < chain.length;
+        // и есть следующая модель. Момент — [startLimitAt]: не прерываем,
+        // если следующей модели заведомо не хватит времени.
+        final nextModel =
+            modelIndex + 1 < chain.length ? chain[modelIndex + 1] : null;
+        final limitStart =
+            current.capabilities.streamsResponse && nextModel != null;
         Timer? startTimer;
         var answerStarted = false;
         Duration? noResponseAfter;
+        int? lastSent;
         void watchStart(AiProgress p) {
           if (!limitStart) return;
           if (p.phase == AiPhase.sending) {
@@ -505,10 +679,17 @@ class AnalysisPipeline {
               startTimer?.cancel();
               startTimer = null;
             } else if (!answerStarted && startTimer == null) {
-              final toReserve = timeLimit - startReserve - total.elapsed;
-              final wait = toReserve < startLimit ? toReserve : startLimit;
-              // Резерва уже нет — прерывать незачем, ждём до конца.
-              if (wait <= Duration.zero) return;
+              final sendEnd = ai.elapsed;
+              final at = startLimitAt(
+                sendEnd: sendEnd,
+                sendTime: sw.elapsed,
+                timeLimit: timeLimit,
+                startLimit: startLimit,
+                currentExpected: expected(current.model),
+                nextExpected: expected(nextModel),
+              );
+              if (at == null) return;
+              final wait = at - sendEnd;
               startTimer = Timer(wait, () {
                 noResponseAfter = wait;
                 attemptCancel.cancel();
@@ -524,6 +705,7 @@ class AnalysisPipeline {
             request,
             onProgress: (p) {
               watchStart(p);
+              if (p.sentBytes != null) lastSent = p.sentBytes;
               if (p.phase != AiPhase.sending) record.sendTime ??= sw.elapsed;
               onProgress(AnalysisProgress(
                 switch (p.phase) {
@@ -549,14 +731,19 @@ class AnalysisPipeline {
         } on AiException catch (e) {
           record
             ..totalTime = sw.elapsed
-            ..sentBytes = e.sentBytes
+            ..sentBytes = e.sentBytes ?? lastSent
             ..notes = e.notes
             ..diag = e.diag
+            ..errorFull = e.fullDetail
+            ..quota = e.quota?.name
+            ..quotaId = e.quotaId
             ..error =
                 '${e.kind.name}${e.detail == null ? '' : ': ${e.detail}'}';
           failed = e;
         } on AnalysisCancelled {
-          record.totalTime = sw.elapsed;
+          record
+            ..totalTime = sw.elapsed
+            ..sentBytes = lastSent;
           if (timedOut && !cancel.isCancelled) {
             record.error = 'timeLimit';
             throw AnalysisFailure(FailureKind.timeLimit, details: [
@@ -604,12 +791,34 @@ class AnalysisPipeline {
               reason = AttemptReason.noResponse;
             case AiErrorKind.rateLimit:
               reason = AttemptReason.rateLimit;
+              if (e.quota == QuotaScope.day) sawDailyQuota = true;
+              // Поминутная квота — пауза по retryDelay и повтор той же
+              // модели, если после паузы ей хватит времени.
+              final wait = e.retryAfter;
+              if (e.quota == QuotaScope.minute && wait != null && !quotaRetried) {
+                final exp = expected(current.model);
+                final need = wait + (exp > minAttemptTime ? exp : minAttemptTime);
+                if (timeLimit - ai.elapsed >= need) {
+                  quotaRetried = true;
+                  nextPause = wait;
+                  nextReason = reason;
+                  onProgress(AnalysisProgress(AnalysisStage.sending,
+                      notice: AttemptNotice(
+                          reason: reason, model: current.model, pause: wait)));
+                  continue;
+                }
+              }
             case AiErrorKind.modelUnavailable when modelIndex > 0:
               reason = AttemptReason.modelUnavailable;
             default:
-              // Ключ, сеть, размер, фильтры, модель пользователя — без цепочки.
+              // Ключ, сеть, размер, фильтры, страна, модель пользователя —
+              // без цепочки.
               throw AnalysisFailure.fromAi(e,
-                  videoMode: mode == SubmissionMode.video);
+                  videoMode: mode == SubmissionMode.video,
+                  providerName: provider.displayName,
+                  hintRu: e.kind == AiErrorKind.rateLimit && sawDailyQuota
+                      ? overloadHintRu
+                      : null);
           }
           if (modelIndex + 1 >= chain.length) {
             throw exhausted(chain.length > 1
@@ -618,10 +827,16 @@ class AnalysisPipeline {
                     ? 'сервер не начал отвечать'
                     : 'повторы не помогли');
           }
+          final next = nextFitting();
+          if (next == null) {
+            throw exhausted('на следующие модели цепочки не хватает времени '
+                '(осталось ${(timeLimit - ai.elapsed).inSeconds} с)');
+          }
           final failedModel = current.model;
-          modelIndex++;
+          modelIndex = next;
           current = providerFor!(chain[modelIndex]);
           sameModelRetried = false;
+          quotaRetried = false;
           request = base;
           nextPause = Duration.zero;
           nextReason = reason;
@@ -678,8 +893,26 @@ class AnalysisPipeline {
       throw AnalysisFailure(FailureKind.internal,
           details: [e.runtimeType.toString()]);
     } finally {
-      trace?.totalTime = total.elapsed;
+      // Загруженный материал удаляется в любом исходе (spec 7.7).
+      final s = shared;
+      final r = sharer;
+      if (s != null && r != null) {
+        final notes = <String>[];
+        await r.releaseShared(s, notes);
+        trace?.uploadNotes.addAll(notes);
+      }
+      trace
+        ?..totalTime = total.elapsed
+        ..aiTime = ai.isRunning || ai.elapsed > Duration.zero ? ai.elapsed : null;
       if (workDir != null) await tempStorage.deleteDir(workDir);
     }
   }
+
+  /// Ответ предварительной проверки, при котором анализ бессмыслен.
+  static const _precheckFatal = {
+    AiErrorKind.invalidKey,
+    AiErrorKind.keyFormat,
+    AiErrorKind.regionBlocked,
+    AiErrorKind.modelUnavailable,
+  };
 }

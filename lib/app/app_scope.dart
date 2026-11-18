@@ -10,6 +10,7 @@ import '../analysis/temp_storage.dart';
 import '../analysis/video_preparer.dart';
 import '../data/app_data.dart';
 import '../platform/video_picker.dart';
+import '../settings/api_key_check.dart';
 import '../settings/settings_store.dart';
 
 /// Что показывается в «Для разработчика»: только в памяти, без ключа.
@@ -54,10 +55,7 @@ class AppServices {
     if (p == null || !settings.isConfigured) {
       throw const AnalysisFailure(FailureKind.notConfigured);
     }
-    final key = await settings.readKey(p.id);
-    if (key == null || key.isEmpty) {
-      throw const AnalysisFailure(FailureKind.notConfigured);
-    }
+    final key = await _cleanKey(p.id);
     return AdapterRegistry.create(
       provider: p,
       model: settings.modelFor(p.id),
@@ -65,6 +63,20 @@ class AppServices {
       baseUrl: settings.baseUrlFor(p),
       transport: transport,
     );
+  }
+
+  /// Сохранённый ключ после той же очистки, что при сохранении (spec 7.2):
+  /// старый ключ с невидимыми символами чистится, ключ с недопустимыми
+  /// символами — понятная ошибка до подготовки видео.
+  Future<String> _cleanKey(String providerId) async {
+    final check = checkApiKey(await settings.readKey(providerId) ?? '');
+    if (check.key.isEmpty) {
+      throw const AnalysisFailure(FailureKind.notConfigured);
+    }
+    if (!check.ok) {
+      throw AnalysisFailure(FailureKind.keyFormat, details: [check.problem]);
+    }
+    return check.key;
   }
 
   Future<AnalysisPipeline> createPipeline() async {
@@ -82,7 +94,7 @@ class AppServices {
     // Запасные модели — данными из providers.json (spec 7.7), у всех
     // провайдеров одинаково; ключ читается один раз.
     final useFallback = settings.useFallbackFor(p.id);
-    final key = await settings.readKey(p.id) ?? '';
+    final key = await _cleanKey(p.id);
     return AnalysisPipeline(
       data: data,
       preparer: preparer,
@@ -91,6 +103,7 @@ class AppServices {
       fallbackModels: useFallback ? p.fallbackModels : const [],
       useFallbackModels: p.fallbackModels.isEmpty ? null : useFallback,
       overloadHintRu: p.overloadHintRu,
+      expectedTime: (model, mode) => p.expectedTime(model, mode.name),
       providerFor: (model) => AdapterRegistry.create(
         provider: p,
         model: model,

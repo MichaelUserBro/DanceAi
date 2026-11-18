@@ -15,6 +15,13 @@ class _UploadedFile {
   final int bytes;
 }
 
+/// Файл, загруженный один раз на анализ ([GoogleProvider.prepareShared]):
+/// попытка его использует, но не удаляет.
+class _SharedFile {
+  _SharedFile(this.file);
+  final _UploadedFile file;
+}
+
 /// Адаптер Google Gemini (`api_type: google`), REST `generateContent`.
 ///
 /// Особенности API (ai.google.dev, ноябрь 2026):
@@ -30,8 +37,16 @@ class _UploadedFile {
 ///   `$schema`/`$id`); не принята (400 про схему) — повтор без неё;
 /// - «размышление»: `thinkingConfig.thinkingLevel` (LOW/MEDIUM/HIGH; у
 ///   gemini-3.8-flash не отключается) входит в `maxOutputTokens`;
-///   temperature/topP/topK для Gemini 3.6+ не передаём.
-class GoogleProvider extends HttpAiProvider {
+///   temperature/topP/topK для Gemini 3.6+ не передаём;
+/// - видео загружается в File API один раз на анализ — URI используют все
+///   попытки и модели цепочки (один ключ — один проект); загрузка упала, а
+///   копия помещается inline, — каждая попытка шлёт видео сама;
+/// - предварительная проверка — `countTokens` (квоту генерации не тратит):
+///   неверный ключ (400 API_KEY_INVALID), неизвестная модель (404);
+/// - 429: вид квоты — `details[QuotaFailure].violations[].quotaId`
+///   (`…PerMinute…` / `…PerDay…`), пауза — `details[RetryInfo].retryDelay`.
+class GoogleProvider extends HttpAiProvider
+    implements AiPrecheck, AiSharedMaterial {
   GoogleProvider({
     required super.model,
     required super.apiKey,
@@ -70,6 +85,8 @@ class GoogleProvider extends HttpAiProvider {
   Future<Object?> prepareMedia(AiRequest request,
       void Function(AiProgress) onProgress, CancelToken cancel,
       List<String> notes) async {
+    final shared = request.shared;
+    if (shared is _UploadedFile) return _SharedFile(shared);
     final video = request.material.video;
     if (request.mode != SubmissionMode.video || video == null) return null;
     if (video.sizeBytes <= inlineVideoMaxBytes) return null;
@@ -99,7 +116,7 @@ class GoogleProvider extends HttpAiProvider {
       cancel: cancel,
     );
     final url = start.headers['x-goog-upload-url'];
-    if (!start.ok || url == null) throw httpError(start, key: key);
+    if (!start.ok || url == null) throw classifyError(start);
     final up = await transport.send(
       HttpCall(
         method: 'POST',
@@ -114,7 +131,7 @@ class GoogleProvider extends HttpAiProvider {
       cancel: cancel,
       onUpload: (f) => onProgress(AiProgress(AiPhase.sending, f)),
     );
-    if (!up.ok) throw httpError(up, key: key);
+    if (!up.ok) throw classifyError(up);
     final f = (bodyOf(up)['file'] as Map?) ?? const {};
     final name = f['name'] as String?;
     final uri = f['uri'] as String?;
@@ -132,7 +149,7 @@ class GoogleProvider extends HttpAiProvider {
             headers: _auth),
         cancel: cancel,
       );
-      if (!r.ok) throw httpError(r, key: key);
+      if (!r.ok) throw classifyError(r);
       final state = bodyOf(r)['state'];
       if (state == 'ACTIVE') return;
       if (state == 'FAILED') {
@@ -172,15 +189,168 @@ class GoogleProvider extends HttpAiProvider {
   @override
   int uploadedBytes(Object? media) => media is _UploadedFile ? media.bytes : 0;
 
+  /// Видео — один раз в File API на весь анализ. Загрузка упала (5xx,
+  /// перегрузка, обрыв, таймаут), а копия помещается inline, — откат на
+  /// inline в этом анализе; иначе ошибка.
+  @override
+  Future<SharedMaterial?> prepareShared(AiRequest request,
+      {required void Function(AiProgress) onProgress,
+      required CancelToken cancel}) async {
+    final video = request.material.video;
+    if (request.mode != SubmissionMode.video || video == null) return null;
+    final sw = Stopwatch()..start();
+    _UploadedFile? file;
+    try {
+      file = await _upload(video.path, video.sizeBytes, onProgress, cancel);
+      final uploadTime = sw.elapsed;
+      final active = Stopwatch()..start();
+      await _waitActive(file, onProgress, cancel);
+      return SharedMaterial(
+        mode: UploadMode.fileApi,
+        handle: file,
+        bytes: file.bytes,
+        uploadTime: uploadTime,
+        activeWait: active.elapsed,
+        notes: ['видео загружено через File API один раз на анализ '
+            '(${file.bytes} байт)'],
+      );
+    } on AiException catch (e) {
+      final notes = <String>[];
+      if (file != null) await _delete(file, notes);
+      final transient = const {
+        AiErrorKind.overloaded,
+        AiErrorKind.server,
+        AiErrorKind.network,
+        AiErrorKind.noResponse,
+      }.contains(e.kind);
+      if (!transient || video.sizeBytes > inlineVideoMaxBytes) {
+        throw e.withInfo(
+            notes: [...notes, for (final n in e.notes) redact(n, key)]);
+      }
+      return SharedMaterial(
+        mode: UploadMode.inlineFallback,
+        bytes: video.sizeBytes,
+        uploadTime: sw.elapsed,
+        notes: [
+          redact('загрузка в File API не удалась (${e.kind.name}'
+              '${e.detail == null ? '' : ': ${e.detail}'}) — видео inline в '
+              'каждой попытке', key),
+          ...notes,
+        ],
+      );
+    }
+  }
+
+  @override
+  Future<void> releaseShared(SharedMaterial material, List<String> notes) async {
+    final file = material.handle;
+    if (file is _UploadedFile) await _delete(file, notes);
+  }
+
+  /// `countTokens` с коротким текстом: ключ, модель, страна — без расхода
+  /// квоты генерации.
+  @override
+  Future<PrecheckResult> precheck(CancelToken cancel) async {
+    final request = 'POST models/$_model:countTokens';
+    final sw = Stopwatch()..start();
+    try {
+      final r = await transport.send(
+        HttpCall.json(
+          'POST',
+          Uri.parse('$baseUrl/v1beta/models/${Uri.encodeComponent(_model)}'
+              ':countTokens'),
+          {
+            'contents': [
+              {
+                'parts': [
+                  {'text': 'ping'}
+                ]
+              }
+            ]
+          },
+          headers: _auth,
+          responseTimeout: const Duration(seconds: 20),
+        ),
+        cancel: cancel,
+      );
+      return PrecheckResult(
+        request: request,
+        status: r.status,
+        time: sw.elapsed,
+        error: r.ok ? null : classifyError(r),
+      );
+    } on AiException catch (e) {
+      return PrecheckResult(
+          request: request,
+          time: sw.elapsed,
+          error: e.withInfo(
+              detail: e.detail == null ? null : redact(e.detail!, key)));
+    }
+  }
+
+  /// 429 Google: вид квоты и пауза из `details` (google.rpc.QuotaFailure,
+  /// google.rpc.RetryInfo).
+  @override
+  AiException classifyError(HttpResult r) {
+    final e = super.classifyError(r);
+    if (e.kind != AiErrorKind.rateLimit) return e;
+    final q = googleQuota(r.json);
+    return e.withQuota(q.scope, quotaId: q.quotaId, retryAfter: q.retryDelay);
+  }
+
+  /// Разбор `error.details` ответа Google (для 429).
+  static ({QuotaScope? scope, String? quotaId, Duration? retryDelay})
+      googleQuota(Object? json) {
+    final err = json is Map ? json['error'] : null;
+    final details = err is Map ? err['details'] : null;
+    String? quotaId;
+    QuotaScope? scope;
+    Duration? delay;
+    if (details is List) {
+      for (final d in details.whereType<Map>()) {
+        final type = '${d['@type'] ?? ''}';
+        if (type.endsWith('QuotaFailure') && d['violations'] is List) {
+          for (final v in (d['violations'] as List).whereType<Map>()) {
+            final id = v['quotaId'];
+            if (id is! String) continue;
+            final s = id.contains('PerDay')
+                ? QuotaScope.day
+                : id.contains('PerMinute')
+                    ? QuotaScope.minute
+                    : null;
+            // Дневная важнее: при ней ждать бессмысленно.
+            if (scope != QuotaScope.day) {
+              scope = s ?? scope;
+              quotaId = id;
+            }
+          }
+        } else if (type.endsWith('RetryInfo')) {
+          final m = RegExp(r'^(\d+(?:\.\d+)?)s$')
+              .firstMatch('${d['retryDelay'] ?? ''}'.trim());
+          if (m != null) {
+            delay = Duration(
+                milliseconds: (double.parse(m.group(1)!) * 1000).round());
+          }
+        }
+      }
+    }
+    return (scope: scope, quotaId: quotaId, retryDelay: delay);
+  }
+
   @override
   Future<HttpCall> buildCall(AiRequest request, Object? media, CallOptions o) async {
     final parts = <Map<String, dynamic>>[];
     final m = request.material;
     if (request.mode == SubmissionMode.video) {
       final meta = {'fps': request.videoFps};
-      if (media is _UploadedFile) {
+      final file = media is _SharedFile
+          ? media.file
+          : media is _UploadedFile
+              ? media
+              : null;
+      if (file != null) {
         parts.add({
-          'fileData': {'mimeType': 'video/mp4', 'fileUri': media.uri},
+          'fileData': {'mimeType': 'video/mp4', 'fileUri': file.uri},
           'videoMetadata': meta,
         });
       } else {
@@ -279,10 +449,8 @@ class GoogleProvider extends HttpAiProvider {
     for (final c in chunks) {
       final err = c['error'];
       if (err is Map) {
-        throw httpError(
-            HttpResult(asInt(err['code']) ?? 500, const {},
-                utf8.encode(jsonEncode(c))),
-            key: key);
+        throw classifyError(HttpResult(
+            asInt(err['code']) ?? 500, const {}, utf8.encode(jsonEncode(c))));
       }
       final feedback = c['promptFeedback'];
       if (feedback is Map && feedback['blockReason'] != null) {

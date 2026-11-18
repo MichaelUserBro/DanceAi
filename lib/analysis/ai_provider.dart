@@ -47,6 +47,7 @@ class AiRequest {
     this.thinkingLevel,
     this.retryNote,
     this.previousResponse,
+    this.shared,
   });
 
   final String danceId;
@@ -71,6 +72,26 @@ class AiRequest {
 
   bool get isRetry => retryNote != null;
 
+  /// Материал, загруженный один раз на весь анализ ([AiSharedMaterial]):
+  /// его используют все попытки и модели цепочки. null — каждая попытка
+  /// отправляет материал сама.
+  final Object? shared;
+
+  /// Тот же запрос с общим материалом.
+  AiRequest withShared(Object? handle) => AiRequest(
+        danceId: danceId,
+        systemPrompt: systemPrompt,
+        userPrompt: userPrompt,
+        mode: mode,
+        material: material,
+        reportSchema: reportSchema,
+        videoFps: videoFps,
+        thinkingLevel: thinkingLevel,
+        retryNote: retryNote,
+        previousResponse: previousResponse,
+        shared: handle,
+      );
+
   AiRequest retry({required String note, required String previous}) =>
       AiRequest(
         danceId: danceId,
@@ -83,6 +104,7 @@ class AiRequest {
         thinkingLevel: thinkingLevel,
         retryNote: note,
         previousResponse: previous,
+        shared: shared,
       );
 }
 
@@ -91,12 +113,16 @@ class AiRequest {
 enum AiPhase { sending, processing, waiting }
 
 class AiProgress {
-  const AiProgress(this.phase, [this.fraction, this.receivedBytes]);
+  const AiProgress(this.phase,
+      [this.fraction, this.receivedBytes, this.sentBytes]);
   final AiPhase phase;
   final double? fraction;
 
   /// Сколько байт ответа уже получено (потоковая отдача) — живой прогресс.
   final int? receivedBytes;
+
+  /// Сколько байт запроса фактически отправлено (для прерванной попытки).
+  final int? sentBytes;
 }
 
 enum AiErrorKind {
@@ -125,7 +151,22 @@ enum AiErrorKind {
   /// прислав заголовков, или истёк предел ожидания начала ответа. Как
   /// перегрузка — следующая модель цепочки.
   noResponse,
+
+  /// Ключ содержит символы, недопустимые в заголовке HTTP (невидимые,
+  /// перенос строки, кириллица) — запрос не уходит.
+  keyFormat,
+
+  /// Запрос не собрался (недопустимое значение заголовка и т. п.) — не сеть.
+  requestFormat,
+
+  /// Провайдер не работает из страны пользователя (Google: 400
+  /// FAILED_PRECONDITION «User location is not supported»).
+  regionBlocked,
 }
+
+/// Какая квота исчерпана (429): поминутная — можно подождать `retryDelay`,
+/// дневная — только следующая модель.
+enum QuotaScope { minute, day }
 
 /// Откуда пришла ошибка: HTTP-статусом или событием внутри потока SSE.
 enum AiErrorSource { http, sse }
@@ -154,10 +195,23 @@ class AiException implements Exception {
       [this.detail, this.retryAfter, this.freeTier = false])
       : notes = const [],
         sentBytes = null,
-        diag = null;
+        diag = null,
+        quota = null,
+        quotaId = null,
+        fullDetail = null;
 
-  const AiException._full(this.kind, this.detail, this.retryAfter,
-      this.freeTier, this.notes, this.sentBytes, this.diag);
+  const AiException.full(
+    this.kind, {
+    this.detail,
+    this.retryAfter,
+    this.freeTier = false,
+    this.notes = const [],
+    this.sentBytes,
+    this.diag,
+    this.quota,
+    this.quotaId,
+    this.fullDetail,
+  });
 
   final AiErrorKind kind;
 
@@ -180,17 +234,49 @@ class AiException implements Exception {
   /// Сведения об HTTP-обмене (статус, время заголовков, источник ошибки).
   final HttpDiag? diag;
 
+  /// 429: какая квота исчерпана (если провайдер сообщил) и её id.
+  final QuotaScope? quota;
+  final String? quotaId;
+
+  /// Полный текст ошибки провайдера (без ключа) — для JSON; [detail]
+  /// короче, для экрана.
+  final String? fullDetail;
+
   /// Та же ошибка с заметками адаптера и сведениями о запросе.
   AiException withInfo(
-          {List<String>? notes, String? detail, int? sentBytes, HttpDiag? diag}) =>
-      AiException._full(
-          kind,
-          detail ?? this.detail,
-          retryAfter,
-          freeTier,
-          notes == null ? this.notes : List.unmodifiable(notes),
-          sentBytes ?? this.sentBytes,
-          diag ?? this.diag);
+          {List<String>? notes,
+          String? detail,
+          String? fullDetail,
+          int? sentBytes,
+          HttpDiag? diag}) =>
+      AiException.full(
+        kind,
+        detail: detail ?? this.detail,
+        retryAfter: retryAfter,
+        freeTier: freeTier,
+        notes: notes == null ? this.notes : List.unmodifiable(notes),
+        sentBytes: sentBytes ?? this.sentBytes,
+        diag: diag ?? this.diag,
+        quota: quota,
+        quotaId: quotaId,
+        fullDetail: fullDetail ?? this.fullDetail,
+      );
+
+  /// Та же ошибка со сведениями о квоте (разбор адаптера).
+  AiException withQuota(QuotaScope? scope,
+          {String? quotaId, Duration? retryAfter}) =>
+      AiException.full(
+        kind,
+        detail: detail,
+        retryAfter: retryAfter ?? this.retryAfter,
+        freeTier: freeTier,
+        notes: notes,
+        sentBytes: sentBytes,
+        diag: diag,
+        quota: scope,
+        quotaId: quotaId ?? this.quotaId,
+        fullDetail: fullDetail,
+      );
 
   /// Та же ошибка с заметками адаптера.
   AiException withNotes(List<String> notes) => withInfo(notes: notes);
@@ -249,6 +335,86 @@ class ModelLookup {
 
   /// null — API не сообщает, что принимает модель.
   final List<String>? inputModalities;
+}
+
+/// Итог предварительной проверки (spec 7.7): запрос, статус, время.
+class PrecheckResult {
+  const PrecheckResult(
+      {required this.request, this.status, required this.time, this.error});
+
+  /// Что проверялось (`POST models/…:countTokens`), без ключа.
+  final String request;
+  final int? status;
+  final Duration time;
+
+  /// null — проверка прошла (или её исход не мешает анализу).
+  final AiException? error;
+
+  Map<String, Object?> toJson() => {
+        'request': request,
+        'http_status': status,
+        'time_ms': time.inMilliseconds,
+        'error': error == null
+            ? null
+            : '${error!.kind.name}${error!.detail == null ? '' : ': ${error!.detail}'}',
+      };
+}
+
+/// Адаптер умеет дешёвую проверку до подготовки видео: ключ, модель,
+/// доступность из страны пользователя. Квоту генерации не тратит.
+abstract interface class AiPrecheck {
+  Future<PrecheckResult> precheck(CancelToken cancel);
+}
+
+/// Как ушёл материал: один раз через хранилище файлов провайдера
+/// (`file_api`), в каждой попытке (`inline`), или в каждой попытке после
+/// сбоя загрузки (`inline_fallback`).
+enum UploadMode { fileApi, inline, inlineFallback }
+
+/// Материал, загруженный один раз на анализ (или решение его не загружать).
+class SharedMaterial {
+  const SharedMaterial({
+    required this.mode,
+    this.handle,
+    this.bytes,
+    this.uploadTime,
+    this.activeWait,
+    this.notes = const [],
+  });
+
+  final UploadMode mode;
+
+  /// Передаётся в [AiRequest.shared]; null — материал не загружен.
+  final Object? handle;
+  final int? bytes;
+  final Duration? uploadTime;
+
+  /// Ожидание готовности файла у провайдера (Google: состояние ACTIVE).
+  final Duration? activeWait;
+  final List<String> notes;
+
+  Map<String, Object?> toJson() => {
+        'upload_mode': switch (mode) {
+          UploadMode.fileApi => 'file_api',
+          UploadMode.inline => 'inline',
+          UploadMode.inlineFallback => 'inline_fallback',
+        },
+        'bytes': bytes,
+        'upload_ms': uploadTime?.inMilliseconds,
+        'active_wait_ms': activeWait?.inMilliseconds,
+        'notes': notes,
+      };
+}
+
+/// Адаптер загружает материал один раз на весь анализ (цепочку моделей
+/// того же провайдера) и удаляет его в конце в любом исходе.
+abstract interface class AiSharedMaterial {
+  /// null — общий материал не нужен (например, кадры).
+  Future<SharedMaterial?> prepareShared(AiRequest request,
+      {required void Function(AiProgress) onProgress,
+      required CancelToken cancel});
+
+  Future<void> releaseShared(SharedMaterial material, List<String> notes);
 }
 
 /// Адаптер провайдера ИИ. Интерфейс приложения не знает, какой работает.

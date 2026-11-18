@@ -57,7 +57,14 @@ Map<String, Object?> analysisExport(AnalysisTrace t, AppData data) {
     'timing_ms': {
       for (final e in d.stageTimes.entries) e.key.name: e.value.inMilliseconds,
       'total': t.totalTime?.inMilliseconds,
+      // Обращение к ИИ — от него считается потолок (spec 7.7).
+      'ai': t.aiTime?.inMilliseconds,
     },
+    'precheck': t.precheck?.toJson(),
+    'upload': t.upload == null
+        ? null
+        : {...t.upload!.toJson(), 'release_notes': t.uploadNotes},
+    'chain_notes': t.chainNotes,
     'retried': t.retried,
     'attempts': [for (final a in t.attempts) a.toJson()],
     'validation_problems': t.problems,

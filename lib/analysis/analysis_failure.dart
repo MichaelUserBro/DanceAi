@@ -1,3 +1,4 @@
+import '../settings/api_key_check.dart';
 import 'ai_provider.dart';
 import 'analysis_pipeline.dart' show analysisTimeLimitRu;
 import 'quota_time.dart';
@@ -35,6 +36,12 @@ enum FailureKind {
 
   /// Сервер ИИ перегружен: повторы и запасные модели не помогли (spec 7.7).
   overloaded,
+
+  /// Ключ с недопустимыми символами — запрос не уходит (spec 7.2).
+  keyFormat,
+
+  /// Провайдер не работает из страны пользователя — нужен VPN.
+  regionBlocked,
 }
 
 /// Понятная ошибка анализа: русский текст и действия. Ключ в текст не попадает.
@@ -45,7 +52,8 @@ class AnalysisFailure implements Exception {
       this.freeTier = false,
       this.videoMode = false,
       this.hintRu,
-      this.framesFallback = false});
+      this.framesFallback = false,
+      this.providerName});
 
   factory AnalysisFailure.fromPrepare(PrepareException e) =>
       AnalysisFailure(switch (e.kind) {
@@ -56,7 +64,8 @@ class AnalysisFailure implements Exception {
 
   /// [videoMode] — материал отправлялся видео целиком: «слишком большой
   /// запрос» тогда решается отправкой кадрами.
-  factory AnalysisFailure.fromAi(AiException e, {bool videoMode = false}) =>
+  factory AnalysisFailure.fromAi(AiException e,
+          {bool videoMode = false, String? providerName, String? hintRu}) =>
       AnalysisFailure(
         switch (e.kind) {
           AiErrorKind.invalidKey => FailureKind.invalidKey,
@@ -72,11 +81,16 @@ class AnalysisFailure implements Exception {
           AiErrorKind.overloaded ||
           AiErrorKind.noResponse =>
             FailureKind.overloaded,
+          AiErrorKind.keyFormat => FailureKind.keyFormat,
+          AiErrorKind.requestFormat => FailureKind.internal,
+          AiErrorKind.regionBlocked => FailureKind.regionBlocked,
         },
         details: [?e.detail],
         retryAfter: e.retryAfter,
         freeTier: e.freeTier,
         videoMode: videoMode,
+        providerName: providerName,
+        hintRu: hintRu,
       );
 
   final FailureKind kind;
@@ -90,8 +104,12 @@ class AnalysisFailure implements Exception {
   /// Материал отправлялся видео целиком (можно предложить кадры).
   final bool videoMode;
 
-  /// Подсказка провайдера к ошибке перегрузки (`overload_hint_ru`).
+  /// Подсказка провайдера о сбросе квоты (`overload_hint_ru`): только если
+  /// среди попыток был 429 дневной квоты.
   final String? hintRu;
+
+  /// Имя провайдера (для «Google не работает из вашей страны»).
+  final String? providerName;
 
   /// Перегрузка в режиме видео: есть запасные модели, принимающие только
   /// кадры, — можно «Отправить кадрами».
@@ -104,7 +122,8 @@ class AnalysisFailure implements Exception {
       freeTier: freeTier,
       videoMode: videoMode,
       hintRu: hintRu,
-      framesFallback: framesFallback);
+      framesFallback: framesFallback,
+      providerName: providerName);
 
   /// Технические подробности для раздела «Для разработчика».
   final List<String> details;
@@ -127,6 +146,9 @@ class AnalysisFailure implements Exception {
         FailureKind.videoEncodeFailed => 'Не удалось подготовить видео',
         FailureKind.timeLimit => 'ИИ отвечает слишком долго',
         FailureKind.overloaded => 'Сервер ИИ перегружен',
+        FailureKind.keyFormat => 'В ключе API недопустимые символы',
+        FailureKind.regionBlocked =>
+          '${providerName ?? 'Провайдер ИИ'} не работает из вашей страны',
       };
 
   String get message => switch (kind) {
@@ -139,11 +161,14 @@ class AnalysisFailure implements Exception {
           'Провайдер не принял ключ API. Проверьте ключ в настройках.',
         FailureKind.rateLimit => [
             'Превышен лимит запросов провайдера.',
-            if (retryAfter != null)
+            if (hintRu != null)
+              'Дневной лимит бесплатного тарифа исчерпан: '
+                  '${fillQuotaHint(hintRu!)}.'
+            else if (retryAfter != null)
               'Повторить можно через ${_wait(retryAfter!)}.'
             else
               'Подождите немного и повторите или выберите другую модель.',
-            if (freeTier)
+            if (freeTier && hintRu == null)
               'У бесплатных моделей есть и дневной лимит запросов — если он '
                   'исчерпан, повторить можно только завтра.',
           ].join(' '),
@@ -181,13 +206,25 @@ class AnalysisFailure implements Exception {
         FailureKind.videoEncodeFailed =>
           'Не удалось подготовить видео для отправки целиком. Можно '
               'отправить его кадрами — выбирать заново не нужно.',
+        FailureKind.keyFormat =>
+          '$apiKeyBadCharsRu Откройте настройки и вставьте ключ заново.',
+        FailureKind.regionBlocked =>
+          'Провайдер не принимает запросы из вашей страны. Включите VPN со '
+              'страной, где сервис доступен, и проверьте, что VPN действует '
+              'для DanceAI: при раздельном туннелировании добавьте DanceAI в '
+              'список приложений, которые идут через VPN.',
         FailureKind.timeLimit =>
           'ИИ не успел подготовить отчёт за $analysisTimeLimitRu. '
               'Попробуйте ещё раз — провайдер мог быть перегружен — или '
               'выберите в настройках более быструю модель.',
         FailureKind.overloaded => [
-            'На бесплатном тарифе такое бывает. Попробуйте через несколько '
-                'минут или позже${hintRu == null ? '' : ' (${fillQuotaHint(hintRu!)})'}.',
+            if (hintRu == null)
+              'На бесплатном тарифе такое бывает. Попробуйте через несколько '
+                  'минут.'
+            else
+              'На бесплатном тарифе такое бывает. Попробуйте через несколько '
+                  'минут; дневной лимит одной из моделей исчерпан '
+                  '(${fillQuotaHint(hintRu!)}).',
             if (framesFallback)
               'Можно отправить то же видео кадрами — для кадров есть '
                   'запасные модели.',
@@ -213,8 +250,10 @@ class AnalysisFailure implements Exception {
         FailureKind.unreadableVideo =>
           const [FailureAction.chooseOtherVideo],
         FailureKind.invalidKey ||
+        FailureKind.keyFormat ||
         FailureKind.notConfigured =>
           const [FailureAction.openSettings, FailureAction.retry],
+        FailureKind.regionBlocked => const [FailureAction.retry],
         FailureKind.tooLarge => const [
             FailureAction.chooseOtherVideo,
             FailureAction.openSettings,

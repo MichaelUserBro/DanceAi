@@ -104,6 +104,11 @@ abstract class HttpAiProvider implements AiProvider {
   /// Сколько байт материала ушло отдельно (загруженный файл).
   int uploadedBytes(Object? media) => 0;
 
+  /// HTTP-ошибка → [AiException]. Адаптер уточняет по формату своего API
+  /// (например, вид исчерпанной квоты у 429).
+  AiException classifyError(HttpResult r) =>
+      httpError(r, key: key, freeTier: freeTier);
+
   @override
   Future<AiResponse> analyze(
     AiRequest request, {
@@ -115,9 +120,11 @@ abstract class HttpAiProvider implements AiProvider {
     var cleaned = false;
     int? sentBytes;
     HttpDiag? diag;
+    var uploaded = 0;
     try {
       onProgress(const AiProgress(AiPhase.sending, 0));
       media = await prepareMedia(request, onProgress, cancel, notes);
+      uploaded = uploadedBytes(media);
       var options = const CallOptions();
       if (usesSchema && schemaRejectedThisSession) {
         notes.add('строгая схема не отправлялась: модель отклонила её ранее '
@@ -133,18 +140,30 @@ abstract class HttpAiProvider implements AiProvider {
       for (var attempt = 0; attempt < 5; attempt++) {
         cancel.throwIfCancelled();
         final call = await buildCall(request, media, options);
-        // Размер известен до отправки — попадёт и в ошибку.
-        sentBytes = call.body.length + uploadedBytes(media);
+        final length = call.body.length;
+        // Пока ничего не ушло — только загруженный файл (если был).
+        sentBytes = uploaded;
         diag = null;
-        onProgress(const AiProgress(AiPhase.sending, 0));
-        final r = await transport.send(
-          call,
-          cancel: cancel,
-          onUpload: (f) => onProgress(f < 1
-              ? AiProgress(AiPhase.sending, f)
-              : const AiProgress(AiPhase.waiting)),
-          onReceive: (n) => onProgress(AiProgress(AiPhase.waiting, null, n)),
-        );
+        onProgress(AiProgress(AiPhase.sending, 0, null, uploaded));
+        final HttpResult r;
+        try {
+          r = await transport.send(
+            call,
+            cancel: cancel,
+            onUpload: (f) {
+              final bytes = uploaded + (f * length).round();
+              onProgress(f < 1
+                  ? AiProgress(AiPhase.sending, f, null, bytes)
+                  : AiProgress(AiPhase.waiting, null, null, bytes));
+            },
+            onReceive: (n) => onProgress(AiProgress(AiPhase.waiting, null, n)),
+          );
+        } on AiException catch (e) {
+          // Фактически отправленное транспортом (0 — запрос не ушёл).
+          sentBytes = uploaded + (e.sentBytes ?? 0);
+          rethrow;
+        }
+        sentBytes = uploaded + (r.sentBytes ?? length);
         cancel.throwIfCancelled();
         diag = HttpDiag(
             status: r.status,
@@ -179,7 +198,7 @@ abstract class HttpAiProvider implements AiProvider {
             options = options.copyWith(limitTokens: false);
             continue;
           }
-          throw httpError(r, key: key, freeTier: freeTier);
+          throw classifyError(r);
         }
         final AiResponse parsed;
         try {
@@ -205,11 +224,18 @@ abstract class HttpAiProvider implements AiProvider {
       await cleanup(media, notes);
       // Последняя страховка: ключ не должен попасть в подробности и заметки.
       final d = e.detail;
-      throw e.withInfo(
+      final full = e.fullDetail;
+      throw AiException.full(
+        e.kind,
         detail: d == null ? null : redact(d, key),
+        retryAfter: e.retryAfter,
+        freeTier: e.freeTier,
         notes: [for (final n in [...e.notes, ...notes]) redact(n, key)],
-        sentBytes: sentBytes,
-        diag: diag,
+        sentBytes: sentBytes ?? e.sentBytes,
+        diag: diag ?? e.diag,
+        quota: e.quota,
+        quotaId: e.quotaId,
+        fullDetail: full == null ? null : redact(full, key),
       );
     } finally {
       if (!cleaned) await cleanup(media, notes);

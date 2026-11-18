@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -17,6 +18,7 @@ import 'package:dance_ai/analysis/temp_storage.dart';
 import 'package:dance_ai/analysis/video_preparer.dart';
 import 'package:dance_ai/app/app_scope.dart';
 import 'package:dance_ai/app/app_version.dart';
+import 'package:dance_ai/data/providers_catalog.dart';
 import 'package:dance_ai/data/sha256.dart';
 import 'package:dance_ai/settings/secure_key_store.dart';
 import 'package:dance_ai/settings/settings_store.dart';
@@ -65,6 +67,40 @@ void main() {
         'usageMetadata': {'promptTokenCount': 5000, 'candidatesTokenCount': 900},
       });
 
+  /// Google на подменённом HTTP: предварительная проверка (`countTokens`) и
+  /// File API (начало загрузки, загрузка, ACTIVE, удаление) отвечают сами,
+  /// запросы генерации — [gen] (индекс — среди них).
+  FakeHttp googleHttp(FutureOr<HttpResult> Function(HttpCall c, int i) gen,
+      {HttpResult? precheck, HttpResult? uploadStart}) {
+    var n = 0;
+    return FakeHttp((c, i) {
+      final u = c.uri.toString();
+      if (u.contains(':countTokens')) {
+        return precheck ?? jsonResult(200, {'totalTokens': 1});
+      }
+      if (u.contains('/upload/v1beta/files')) {
+        return uploadStart ??
+            jsonResult(200, {}, {'x-goog-upload-url': 'https://g.test/up/1'});
+      }
+      if (u.endsWith('/up/1')) {
+        return jsonResult(200, {
+          'file': {'name': 'files/abc', 'uri': 'https://g.test/v1beta/files/abc'}
+        });
+      }
+      if (u.endsWith('/v1beta/files/abc')) {
+        return c.method == 'DELETE'
+            ? jsonResult(200, {})
+            : jsonResult(200, {'state': 'ACTIVE'});
+      }
+      return gen(c, n++);
+    });
+  }
+
+  List<HttpCall> gens(FakeHttp h) => [
+        for (final c in h.calls)
+          if (c.uri.path.contains('GenerateContent')) c,
+      ];
+
   // Тот же путь, что в приложении: DeviceVideoPreparer (FFmpeg подменён),
   // изолят анализа музыки, настоящий адаптер на подменённом HTTP.
   DeviceVideoPreparer preparer(FakeMediaTool tool) => DeviceVideoPreparer(
@@ -95,11 +131,11 @@ void main() {
       );
 
   group('режим видео (путь приложения)', () {
-    test('успех: облегчённая копия создана, отправлена inline с fps, удалена; '
-        'кадры не извлекались', () async {
+    test('успех: облегчённая копия загружена в File API один раз, запрос с '
+        'fileUri и fps, файл и копия удалены; кадры не извлекались', () async {
       final t = tool();
       bool? lightExistedOnSend;
-      final http = FakeHttp((c, i) {
+      final http = googleHttp((c, i) {
         lightExistedOnSend = File(t.lastLightPath!).existsSync();
         return googleOk(valid);
       });
@@ -113,8 +149,14 @@ void main() {
       expect(lightExistedOnSend, isTrue);
       expect(File(t.lastLightPath!).existsSync(), isFalse);
       expect(workDirsLeft(), isFalse);
-      final part = (FakeHttp.body(http.calls.single)['contents'][0]['parts'] as List).first;
+      final part = (FakeHttp.body(gens(http).single)['contents'][0]['parts'] as List).first;
       expect(part['videoMetadata'], {'fps': 4.0});
+      expect(part['fileData']['fileUri'], 'https://g.test/v1beta/files/abc');
+      expect(http.calls.where((c) => c.method == 'DELETE'), hasLength(1));
+      expect(trace.upload!.mode, UploadMode.fileApi);
+      expect(trace.upload!.activeWait, isNotNull);
+      expect(trace.precheck!.status, 200);
+      expect(trace.uploadNotes, contains('файл удалён с сервера'));
       expect(trace.mode, SubmissionMode.video);
       expect(trace.videoFps, 4);
       expect(trace.prepare.lightVideoBytes, 4000);
@@ -125,13 +167,16 @@ void main() {
 
     test('ошибка API: копия удалена', () async {
       final t = tool();
-      final http = FakeHttp((c, i) => jsonResult(400, {'error': {'message': 'boom'}}));
+      final http =
+          googleHttp((c, i) => jsonResult(400, {'error': {'message': 'boom'}}));
       await expectLater(
           run(GoogleProvider(model: 'm', apiKey: _key, baseUrl: 'https://g.test',
               transport: http), t),
           throwsA(isA<AnalysisFailure>().having((f) => f.kind, 'kind', FailureKind.server)));
       expect(File(t.lastLightPath!).existsSync(), isFalse);
       expect(workDirsLeft(), isFalse);
+      // Загруженный файл удалён и при ошибке.
+      expect(http.calls.where((c) => c.method == 'DELETE'), hasLength(1));
     });
 
     test('отмена во время сжатия: копия удалена', () async {
@@ -148,7 +193,7 @@ void main() {
     test('отмена во время ожидания ответа: копия удалена', () async {
       final t = tool();
       final cancel = CancelToken();
-      final http = FakeHttp((c, i) async {
+      final http = googleHttp((c, i) async {
         cancel.cancel();
         return googleOk(valid);
       });
@@ -156,6 +201,7 @@ void main() {
           run(GoogleProvider(model: 'm', apiKey: _key, baseUrl: 'https://g.test',
               transport: http), t, cancel: cancel),
           throwsA(isA<AnalysisCancelled>()));
+      expect(http.calls.where((c) => c.method == 'DELETE'), hasLength(1));
       expect(File(t.lastLightPath!).existsSync(), isFalse);
       expect(workDirsLeft(), isFalse);
     });
@@ -194,23 +240,163 @@ void main() {
 
     test('«Отправить кадрами»: тот же анализ кадрами, без копии видео', () async {
       final t = tool();
-      final http = FakeHttp((c, i) => googleOk(valid));
+      final http = googleHttp((c, i) => googleOk(valid));
       await run(GoogleProvider(model: 'm', apiKey: _key, baseUrl: 'https://g.test',
           transport: http), t, forceFrames: true);
       expect(t.calls, ['probe', 'frames', 'audio']);
-      final parts = FakeHttp.body(http.calls.single)['contents'][0]['parts'] as List;
+      // Кадры — inline, File API не нужен.
+      expect(http.calls.where((c) => c.uri.path.contains('upload')), isEmpty);
+      final parts = FakeHttp.body(gens(http).single)['contents'][0]['parts'] as List;
       expect(parts.first, {'text': 't=0.00'});
+    });
+  });
+
+  group('предварительная проверка и загрузка в File API (spec 7.7)', () {
+    HttpResult googleError(int code, String status, String message) =>
+        jsonResult(code, {
+          'error': {'code': code, 'status': status, 'message': message}
+        });
+
+    for (final (name, precheck, kind) in [
+      (
+        'неверный ключ',
+        googleError(400, 'INVALID_ARGUMENT',
+            'API key not valid. Please pass a valid API key.'),
+        FailureKind.invalidKey,
+      ),
+      (
+        'страна',
+        googleError(400, 'FAILED_PRECONDITION',
+            'User location is not supported for the API use.'),
+        FailureKind.regionBlocked,
+      ),
+      (
+        'неизвестная модель',
+        googleError(404, 'NOT_FOUND', 'Model is not found'),
+        FailureKind.modelUnavailable,
+      ),
+    ]) {
+      test('$name → ошибка сразу, сжатие отменено, генерации не было',
+          () async {
+        final t = tool(hangOnLight: true);
+        final http = googleHttp((c, i) => fail('генерации быть не должно'),
+            precheck: precheck);
+        final trace = AnalysisTrace();
+        await expectLater(
+            run(
+                GoogleProvider(
+                    model: 'gemini-3.6-flash',
+                    apiKey: _key,
+                    baseUrl: 'https://g.test',
+                    transport: http),
+                t,
+                trace: trace),
+            throwsA(isA<AnalysisFailure>().having((f) => f.kind, 'kind', kind)));
+        // Подготовка прервана: до анализа музыки дело не дошло.
+        expect(t.calls, isNot(contains('audio')));
+        expect(gens(http), isEmpty);
+        expect(workDirsLeft(), isFalse);
+        final j = jsonDecode(analysisExportText(trace, data)) as Map;
+        expect(j['precheck']['http_status'], precheck.status);
+        expect(j['precheck']['error'], isNotNull);
+        expect(jsonEncode(j), isNot(contains(_key)));
+      });
+    }
+
+    test('проверка не удалась по сети — анализ идёт дальше', () async {
+      final http = googleHttp((c, i) => googleOk(valid),
+          precheck: googleError(503, 'UNAVAILABLE', 'high demand'));
+      final r = await run(
+          GoogleProvider(
+              model: 'm', apiKey: _key, baseUrl: 'https://g.test', transport: http),
+          tool());
+      expect(r.report.danceId, 'samba');
+    });
+
+    test('загрузка в File API упала (503), копия помещается inline → откат на '
+        'inline в этом анализе', () async {
+      final http = googleHttp((c, i) => googleOk(valid),
+          uploadStart: googleError(503, 'UNAVAILABLE', 'high demand'));
+      final trace = AnalysisTrace();
+      await run(
+          GoogleProvider(
+              model: 'm', apiKey: _key, baseUrl: 'https://g.test', transport: http),
+          tool(),
+          trace: trace);
+      final part =
+          (FakeHttp.body(gens(http).single)['contents'][0]['parts'] as List).first;
+      expect(part['inlineData'], isNotNull);
+      final j = jsonDecode(analysisExportText(trace, data)) as Map;
+      expect(j['upload']['upload_mode'], 'inline_fallback');
+      expect((j['upload']['notes'] as List).single, contains('File API'));
+    });
+
+    test('загрузка упала, а копия больше порога inline → ошибка, без inline',
+        () async {
+      final http = googleHttp((c, i) => fail('генерации быть не должно'),
+          uploadStart: googleError(503, 'UNAVAILABLE', 'high demand'));
+      await expectLater(
+          run(
+              GoogleProvider(
+                  model: 'm',
+                  apiKey: _key,
+                  baseUrl: 'https://g.test',
+                  transport: http,
+                  inlineVideoMaxBytes: 1000),
+              tool()),
+          throwsA(isA<AnalysisFailure>()
+              .having((f) => f.kind, 'kind', FailureKind.overloaded)));
+      expect(gens(http), isEmpty);
+    });
+
+    test('цепочка: файл загружен один раз, все модели используют его URI, '
+        'удалён один раз', () async {
+      final http = googleHttp((c, i) => i == 0
+          ? googleError(503, 'UNAVAILABLE', 'high demand')
+          : googleOk(valid));
+      GoogleProvider g(String model) => GoogleProvider(
+          model: model, apiKey: _key, baseUrl: 'https://g.test', transport: http);
+      final trace = AnalysisTrace();
+      final r = await AnalysisPipeline(
+        data: data,
+        preparer: preparer(tool(size: 200000)),
+        provider: g('main'),
+        tempStorage: storage,
+        fallbackModels: const [
+          FallbackModel(id: 'fb1', modes: {'video', 'frames'}),
+        ],
+        providerFor: g,
+        slowOverload: Duration.zero,
+      ).run(
+          dance: samba,
+          videoPath: 'v.mp4',
+          wantVideo: true,
+          cancel: CancelToken(),
+          onProgress: (_) {},
+          trace: trace);
+      expect(r.fallbackModel, 'fb1');
+      expect(http.calls.where((c) => c.uri.toString().endsWith('/up/1')),
+          hasLength(1));
+      expect(http.calls.where((c) => c.method == 'DELETE'), hasLength(1));
+      for (final c in gens(http)) {
+        final part = (FakeHttp.body(c)['contents'][0]['parts'] as List).first;
+        expect(part['fileData']['fileUri'], 'https://g.test/v1beta/files/abc');
+      }
+      // Попытки шлют только JSON запроса — без видео (200 КБ).
+      for (final a in trace.attempts) {
+        expect(a.sentBytes, lessThan(100000));
+      }
     });
   });
 
   group('потолок времени и настройки подачи', () {
     test('ответ не пришёл до потолка → timeLimit «Попробовать ещё раз», '
         'запрос оборван, папка удалена', () async {
-      final http = FakeHttp((c, i) async {
+      final http = googleHttp((c, i) async {
         await Future<void>.delayed(const Duration(seconds: 5));
         return googleOk(valid);
       });
-      final sw = Stopwatch()..start();
+      final trace = AnalysisTrace();
       await expectLater(
         AnalysisPipeline(
           data: data,
@@ -224,19 +410,22 @@ void main() {
             videoPath: 'v.mp4',
             wantVideo: false,
             cancel: CancelToken(),
-            onProgress: (_) {}),
+            onProgress: (_) {},
+            trace: trace),
         throwsA(isA<AnalysisFailure>()
             .having((f) => f.kind, 'kind', FailureKind.timeLimit)
             .having((f) => f.retryLabel, 'label', 'Попробовать ещё раз')
             .having((f) => f.actions.first, 'action', FailureAction.retry)),
       );
-      expect(sw.elapsed, lessThan(const Duration(seconds: 4)));
+      // Потолок — от обращения к ИИ, подготовка в него не входит.
+      expect(trace.aiTime, lessThan(const Duration(seconds: 3)));
+      expect(trace.aiTime, greaterThanOrEqualTo(const Duration(milliseconds: 1400)));
       expect(workDirsLeft(), isFalse);
     });
 
     test('невалидный ответ, а до потолка мало времени → повтор не '
         'запускается, timeLimit', () async {
-      final http = FakeHttp((c, i) => googleOk('не JSON'));
+      final http = googleHttp((c, i) => googleOk('не JSON'));
       final trace = AnalysisTrace();
       await expectLater(
         AnalysisPipeline(
@@ -256,13 +445,13 @@ void main() {
         throwsA(isA<AnalysisFailure>()
             .having((f) => f.kind, 'kind', FailureKind.timeLimit)),
       );
-      expect(http.calls, hasLength(1));
+      expect(gens(http), hasLength(1));
       expect(trace.attempts, hasLength(1));
     });
 
     test('«Максимум кадров» и уровень размышления доходят до запроса', () async {
       final t = tool();
-      final http = FakeHttp((c, i) => googleOk(valid));
+      final http = googleHttp((c, i) => googleOk(valid));
       final trace = AnalysisTrace();
       await AnalysisPipeline(
         data: data,
@@ -279,9 +468,9 @@ void main() {
           trace: trace,
           maxFrames: 10,
           thinkingLevel: 'low');
-      final parts = FakeHttp.body(http.calls.single)['contents'][0]['parts'] as List;
+      final parts = FakeHttp.body(gens(http).single)['contents'][0]['parts'] as List;
       expect(parts.where((p) => p is Map && p.containsKey('inlineData')), hasLength(10));
-      expect(FakeHttp.body(http.calls.single)['generationConfig']['thinkingConfig'],
+      expect(FakeHttp.body(gens(http).single)['generationConfig']['thinkingConfig'],
           {'thinkingLevel': 'LOW'});
       expect(trace.maxFramesSetting, 10);
       final j = jsonDecode(analysisExportText(trace, data)) as Map;
@@ -317,7 +506,7 @@ void main() {
     test('содержит версии, подачу, музыку, попытки, отчёт; без ключа и промпта',
         () async {
       final t = tool();
-      final http = FakeHttp((c, i) => i == 0
+      final http = googleHttp((c, i) => i == 0
           ? googleOk('не JSON, ключ $_key')
           : googleOk('```json\n$valid\n```'));
       final trace = AnalysisTrace();
@@ -339,6 +528,14 @@ void main() {
       expect(j['attempts'], hasLength(2));
       expect((j['report'] as Map)['dance_id'], 'samba');
       expect(j['raw_responses'], hasLength(2));
+      expect(j['precheck']['http_status'], 200);
+      expect(j['precheck']['request'], 'POST models/gemini-3.8-flash:countTokens');
+      expect(j['upload']['upload_mode'], 'file_api');
+      expect(j['upload']['active_wait_ms'], isA<int>());
+      expect(j['timing_ms']['ai'], isA<int>());
+      // Файл загружен один раз; обе попытки шлют только JSON запроса.
+      expect(http.calls.where((c) => c.uri.toString().endsWith('/up/1')),
+          hasLength(1));
       // Сырые ответы — как вернула модель; ключ, процитированный моделью,
       // в файл не попадает только если его нет в ответе — здесь проверяем,
       // что сами мы ключ не пишем: в запросах/сведениях его нет.
@@ -351,7 +548,7 @@ void main() {
 
     test('ошибка API с ключом в тексте сервера → ни в трассировке, ни в файле',
         () async {
-      final http = FakeHttp((c, i) => jsonResult(401, {
+      final http = googleHttp((c, i) => jsonResult(401, {
             'error': {'message': 'API key $_key is invalid'}
           }));
       final trace = AnalysisTrace();
@@ -441,6 +638,63 @@ void main() {
       expect(data.providers.byId('google')!.verifiedLive, isFalse);
       expect(data.providers.byId('openrouter')!.verifiedLive, isFalse);
       expect(AdapterRegistry.realAdaptersAvailable, isTrue);
+    });
+    test('ключ: невидимые символы и перенос строки убираются при сохранении; '
+        'с кириллицей — не сохраняется', () async {
+      expect(await settings.saveKey('google', '​AIza-abc\n123  '),
+          isNull);
+      expect(await settings.readKey('google'), 'AIza-abc123');
+      final error = await settings.saveKey('google', 'AIza-абв');
+      expect(error, contains('недопустимые символы'));
+      expect(await settings.readKey('google'), 'AIza-abc123');
+    });
+
+    test('сохранённый ключ с недопустимыми символами → keyFormat до '
+        'подготовки видео; с невидимыми — очищается', () async {
+      await settings.selectProvider('google');
+      await settings.setModel('google', 'gemini-3.6-flash');
+      // Ключ, сохранённый прежней версией (без очистки).
+      final keys = MemoryKeyStore();
+      await keys.write('google', 'AIza-SECRETж');
+      settings = SettingsStore(catalog: data.providers, prefs: prefs, keys: keys);
+      await settings.load();
+      await expectLater(
+          services().createProvider(),
+          throwsA(isA<AnalysisFailure>()
+              .having((f) => f.kind, 'kind', FailureKind.keyFormat)
+              .having((f) => f.details.single, 'details', contains('U+0436'))
+              .having((f) => f.details.single, 'details',
+                  isNot(contains('SECRET')))));
+      await keys.write('google', 'AIza-abc​123');
+      final p = await services().createProvider() as GoogleProvider;
+      expect(p.key, 'AIza-abc123');
+    });
+
+    test('видео по умолчанию — из providers.json (Google — да, OpenRouter — '
+        'нет); сохранённый выбор не меняется', () async {
+      expect(data.providers.byId('google')!.videoDefault, isTrue);
+      expect(data.providers.byId('openrouter')!.videoDefault, isFalse);
+      final google = data.providers.byId('google')!;
+      expect(settings.videoModeFor(google), isTrue);
+      await settings.setVideoMode('google', false);
+      final again =
+          SettingsStore(catalog: data.providers, prefs: prefs, keys: MemoryKeyStore());
+      await again.load();
+      expect(again.videoModeFor(google), isFalse);
+    });
+
+    test('ожидаемое время моделей — из providers.json', () {
+      final g = data.providers.byId('google')!;
+      expect(g.expectedTime('gemini-3.6-flash', 'video'),
+          const Duration(seconds: 105));
+      expect(g.expectedTime('models/gemini-3-flash-preview', 'frames'),
+          const Duration(seconds: 110));
+      expect(g.expectedTime('незнакомая', 'video'), const Duration(seconds: 110));
+      expect(data.providers.byId('openrouter')!.expectedTime('x', 'video'),
+          isNull);
+      for (final f in g.fallbackModels) {
+        expect(g.expectedSec.containsKey(f.id), isTrue, reason: f.id);
+      }
     });
   });
 }

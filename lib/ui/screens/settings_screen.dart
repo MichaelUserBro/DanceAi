@@ -10,6 +10,7 @@ import '../../analysis/cancel_token.dart';
 import '../../app/app_scope.dart';
 import '../../app/routes.dart';
 import '../../data/providers_catalog.dart';
+import '../../settings/api_key_check.dart';
 import '../../settings/settings_store.dart';
 import '../../theme/stage_theme.dart';
 import '../widgets/common.dart';
@@ -307,6 +308,9 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
   bool _showKey = false;
   Timer? _saveKeyTimer;
 
+  /// Ключ не сохранён: недопустимые символы (spec 7.2).
+  String? _keyError;
+
   /// Подсказка о возможностях модели (spec 7.2): null — ничего не знаем.
   ModelLookup? _lookup;
   Timer? _lookupTimer;
@@ -339,9 +343,12 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
     final p = widget.provider;
     final s = widget.settings;
     final model = _model.text.trim();
-    final key = _key.text.trim();
+    final check = checkApiKey(_key.text);
+    final key = check.key;
     final url = s.baseUrlFor(p).trim();
-    if (!mounted || model.isEmpty || key.isEmpty || url.isEmpty) return;
+    if (!mounted || model.isEmpty || key.isEmpty || !check.ok || url.isEmpty) {
+      return;
+    }
     final cancel = _lookupCancel = CancelToken();
     final provider = AdapterRegistry.create(
       provider: p,
@@ -377,8 +384,10 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
 
   void _onKeyChanged(String value) {
     _saveKeyTimer?.cancel();
-    _saveKeyTimer = Timer(const Duration(milliseconds: 500),
-        () => widget.settings.saveKey(widget.provider.id, value));
+    _saveKeyTimer = Timer(const Duration(milliseconds: 500), () async {
+      final error = await widget.settings.saveKey(widget.provider.id, value);
+      if (mounted && error != _keyError) setState(() => _keyError = error);
+    });
     _scheduleLookup();
   }
 
@@ -535,6 +544,8 @@ class _ProviderDetailsState extends State<_ProviderDetails> {
               hintText: _keyLoaded ? 'Вставьте ключ' : 'Загрузка…',
               helperText: 'Хранится только на этом устройстве, '
                   'в защищённом хранилище',
+              errorText: _keyError,
+              errorMaxLines: 3,
               helperStyle: StageText.body(12, color: StageColors.textMuted),
               suffixIcon: IconButton(
                 tooltip: _showKey ? 'Скрыть ключ' : 'Показать ключ',

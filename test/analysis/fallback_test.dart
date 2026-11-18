@@ -23,6 +23,16 @@ import '../test_data.dart';
 const _overloaded =
     AiException(AiErrorKind.overloaded, 'HTTP 503: UNAVAILABLE: high demand');
 const _quota = AiException(AiErrorKind.rateLimit, 'HTTP 429: RESOURCE_EXHAUSTED');
+const _dayQuota = AiException.full(AiErrorKind.rateLimit,
+    detail: 'HTTP 429: RESOURCE_EXHAUSTED: free tier requests per day',
+    quota: QuotaScope.day,
+    quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier',
+    fullDetail: 'HTTP 429: RESOURCE_EXHAUSTED: … полный текст …');
+const _minuteQuota = AiException.full(AiErrorKind.rateLimit,
+    detail: 'HTTP 429: RESOURCE_EXHAUSTED: per minute',
+    quota: QuotaScope.minute,
+    quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier',
+    retryAfter: Duration(seconds: 20));
 
 /// Кадры или облегчённая копия во временной папке анализа.
 class _Preparer implements VideoPreparer {
@@ -110,7 +120,7 @@ class _Provider implements AiProvider {
     final a = outcomes[n - 1];
     if (a is AiException) throw a.withInfo(sentBytes: 100);
     onProgress(const AiProgress(AiPhase.sending, 0));
-    onProgress(const AiProgress(AiPhase.waiting));
+    onProgress(const AiProgress(AiPhase.waiting, null, null, 100));
     if (a is _Silent) {
       await cancel.whenCancelled;
       throw const AnalysisCancelled();
@@ -151,7 +161,7 @@ void main() {
     Duration timeLimit = analysisTimeLimit,
     Duration slowOverload = slowOverloadThreshold,
     Duration startLimit = const Duration(milliseconds: 100),
-    Duration startReserve = fallbackReserve,
+    Duration? Function(String model, SubmissionMode mode)? expectedTime,
     bool realPause = false,
   }) {
     final pauses = <Duration>[];
@@ -167,7 +177,7 @@ void main() {
       timeLimit: timeLimit,
       slowOverload: slowOverload,
       startLimit: startLimit,
-      startReserve: startReserve,
+      expectedTime: expectedTime,
       pause: realPause
           ? null
           : (d, c) async {
@@ -281,12 +291,12 @@ void main() {
     expect(r.fallbackModel, 'fb2');
   });
 
-  test('всё исчерпано → «Сервер ИИ перегружен» с временем сброса квоты',
-      () async {
+  test('всё исчерпано, была дневная квота → «Сервер ИИ перегружен» с '
+      'временем сброса квоты', () async {
     final m = _Models({
       'main': [_overloaded, _overloaded],
-      'fb1': [_overloaded, _quota],
-      'fb2': [_quota],
+      'fb1': [_overloaded, _dayQuota],
+      'fb2': [_dayQuota],
     });
     final x = make(m);
     final trace = AnalysisTrace();
@@ -305,6 +315,186 @@ void main() {
     expect(m.calls.map((c) => c.$1), ['main', 'main', 'fb1', 'fb1', 'fb2']);
     expect(x.pauses, const [Duration(seconds: 5), Duration(seconds: 10)]);
     expect(trace.failure, startsWith('overloaded'));
+  });
+
+  test('одни 503 → «попробуйте через несколько минут», без времени сброса '
+      'квоты', () async {
+    final m = _Models({
+      'main': [_overloaded, _overloaded],
+      'fb1': [_overloaded, _overloaded],
+      'fb2': [_overloaded, _overloaded],
+    });
+    AnalysisFailure? f;
+    try {
+      await run(make(m).pipeline);
+    } on AnalysisFailure catch (e) {
+      f = e;
+    }
+    expect(f!.kind, FailureKind.overloaded);
+    expect(f.message, contains('Попробуйте через несколько минут.'));
+    expect(f.message, isNot(contains('квота Google')));
+  });
+
+  group('429: поминутная и дневная квота', () {
+    test('поминутная — пауза по retryDelay и повтор той же модели', () async {
+      final m = _Models({'main': [_minuteQuota, valid]});
+      final x = make(m);
+      final trace = AnalysisTrace();
+      final progress = <AnalysisProgress>[];
+      final r = await run(x.pipeline, trace: trace, progress: progress);
+      expect(m.calls.map((c) => c.$1), ['main', 'main']);
+      expect(x.pauses, [const Duration(seconds: 20)]);
+      expect(r.fallbackModel, isNull);
+      expect(trace.attempts.first.quota, 'minute');
+      expect(trace.attempts.first.quotaId, contains('PerMinute'));
+      final n = progress.map((p) => p.notice).nonNulls.single;
+      expect(noticeText(n),
+          'Лимит запросов модели main в минуту — жду 20 с и пробую ещё раз…');
+    });
+
+    test('поминутная, но пауза не влезает в потолок → следующая модель',
+        () async {
+      final m = _Models({
+        'main': [_minuteQuota],
+        'fb1': [valid],
+      });
+      // Пауза 20 с + ожидаемые 60 с > потолка 70 с.
+      final x = make(m,
+          timeLimit: const Duration(seconds: 70),
+          expectedTime: (_, _) => const Duration(seconds: 60));
+      final r = await run(x.pipeline);
+      expect(x.pauses, isEmpty);
+      expect(r.fallbackModel, 'fb1');
+    });
+
+    test('дневная — сразу следующая модель, без паузы; полный текст в JSON',
+        () async {
+      final m = _Models({
+        'main': [_dayQuota],
+        'fb1': [valid],
+      });
+      final x = make(m);
+      final trace = AnalysisTrace();
+      final r = await run(x.pipeline, trace: trace);
+      expect(x.pauses, isEmpty);
+      expect(r.fallbackModel, 'fb1');
+      final a = (analysisExport(trace, data)['attempts'] as List).first as Map;
+      expect(a['quota'], 'day');
+      expect(a['error_full'], contains('полный текст'));
+    });
+
+    test('только дневная квота везде → «Лимит запросов» с временем сброса',
+        () async {
+      final m = _Models({
+        'main': [_dayQuota],
+        'fb1': [_dayQuota],
+        'fb2': [_dayQuota],
+      });
+      AnalysisFailure? f;
+      try {
+        await run(make(m).pipeline);
+      } on AnalysisFailure catch (e) {
+        f = e;
+      }
+      expect(f!.kind, FailureKind.rateLimit);
+      expect(f.message, contains('квота Google обновляется в'));
+    });
+  });
+
+  test('регион (400 «User location is not supported») — понятная ошибка, '
+      'без цепочки', () async {
+    final m = _Models({
+      'main': [
+        const AiException(AiErrorKind.regionBlocked,
+            'HTTP 400: FAILED_PRECONDITION: User location is not supported'),
+      ],
+    });
+    AnalysisFailure? f;
+    try {
+      await run(make(m).pipeline);
+    } on AnalysisFailure catch (e) {
+      f = e;
+    }
+    expect(f!.kind, FailureKind.regionBlocked);
+    expect(f.title, 'Тест не работает из вашей страны');
+    expect(f.message, contains('VPN'));
+    expect(f.message, contains('раздельном туннелировании'));
+    expect(m.calls, hasLength(1));
+  });
+
+  test('модели, которой не хватает времени, пропускаются', () async {
+    final m = _Models({
+      'main': [_dayQuota],
+      'fb2': [valid],
+    });
+    final trace = AnalysisTrace();
+    final r = await run(
+        make(m,
+                expectedTime: (model, _) => model == 'fb1'
+                    ? const Duration(minutes: 10)
+                    : const Duration(seconds: 60))
+            .pipeline,
+        trace: trace);
+    expect(m.calls.map((c) => c.$1), ['main', 'fb2']);
+    expect(r.fallbackModel, 'fb2');
+    expect(trace.chainNotes.single, startsWith('fb1 пропущена'));
+  });
+
+  group('когда прерывать ожидание начала ответа (spec 7.7)', () {
+    const s = Duration(seconds: 1);
+    Duration? at(
+            {required int sendEnd,
+            required int sendTime,
+            required int current,
+            required int next}) =>
+        startLimitAt(
+          sendEnd: s * sendEnd,
+          sendTime: s * sendTime,
+          timeLimit: analysisTimeLimit,
+          startLimit: responseStartLimit,
+          currentExpected: s * current,
+          nextExpected: s * next,
+        );
+
+    test('прогон 20:22 (вальс, видео): preview после 3.6-flash — не '
+        'прерываем ради hydrogen', () {
+      // От начала обращения к ИИ: 3.6-flash 503 за 14,4 с, пауза 5 с, 429
+      // через 3,9 с; preview стартует на 23,3 с, отправка 3,2 с → 26,5 с.
+      // hydrogen на видео — 250 с: + 3,2 с отправки + 10 с запаса = 263 с.
+      // В 176,5 с (150 с после отправки) останется 123,5 с < 263 с;
+      // раньше — с 37 с, но у preview не было честного шанса (70 × 1,25).
+      expect(at(sendEnd: 26, sendTime: 3, current: 70, next: 250), isNull);
+    });
+
+    test('прогон 13:07 (вальс, кадры): preview после медленного 503 — не '
+        'прерываем', () {
+      // 3.6-flash 503 через 130 с; preview: старт 130 с, отправка 3,2 с.
+      expect(at(sendEnd: 133, sendTime: 3, current: 110, next: 250), isNull);
+    });
+
+    test('модель зависла с начала — прерываем через 150 с, следующей хватает',
+        () {
+      // 3.6-flash на кадрах: отправка 3 с; preview (110 с) + 3 + 10 = 123 с.
+      expect(at(sendEnd: 3, sendTime: 3, current: 150, next: 110),
+          const Duration(seconds: 153));
+    });
+
+    test('раньше 150 с — только после честного шанса текущей модели', () {
+      // Отправка к 10 с; следующей нужно 150 + 10 + 10 = 170 с → прервать не
+      // позже 130 с; честный шанс: 10 + 80 × 1,25 = 110 с ≤ 130 → в 130 с.
+      expect(at(sendEnd: 10, sendTime: 10, current: 80, next: 150),
+          const Duration(seconds: 130));
+    });
+  });
+
+  test('прерванная попытка — отправленные байты записаны', () async {
+    final m = _Models({
+      'main': [const _Silent()],
+      'fb1': [valid],
+    }, streams: true);
+    final trace = AnalysisTrace();
+    await run(make(m).pipeline, trace: trace);
+    expect(trace.attempts.first.sentBytes, 100);
   });
 
   test('только 429 везде → «Лимит запросов», не «перегружен»', () async {
@@ -487,11 +677,16 @@ void main() {
       expect(m.calls, hasLength(1));
     });
 
-    test('до потолка уже меньше резерва — не прерываем', () async {
+    test('следующей модели заведомо не хватит времени — не прерываем',
+        () async {
       final m = _Models({'main': [_Late(valid, slow)]}, streams: true);
-      final r = await run(
-          make(m, startReserve: analysisTimeLimit).pipeline);
+      final r = await run(make(m,
+              expectedTime: (model, _) => model == 'main'
+                  ? const Duration(milliseconds: 10)
+                  : const Duration(minutes: 10))
+          .pipeline);
       expect(r.fallbackModel, isNull);
+      expect(m.calls, hasLength(1));
     });
 
     test('обрыв до заголовков (noResponse) → запасная', () async {
