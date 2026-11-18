@@ -80,6 +80,26 @@ void main() {
       expect(allFigureIds, isNot(contains('tipli')));
       expect(allFigureIds, isNot(contains('chek')));
     });
+
+    test('версия 1.3; «шассе», не «шоссе» (имена и примечания)', () {
+      expect(criteria['version'], '1.3');
+      final text = File('assets/criteria.json').readAsStringSync();
+      expect(text.toLowerCase(), isNot(contains('шоссе')));
+      expect(text, contains('Шассе (из променада)'));
+      expect(text, contains('Типль шассе (типли)'));
+    });
+
+    test('спин и правый поворот: различие по пивоту в примечаниях', () {
+      Map<String, dynamic> figure(String dance, String id) =>
+          _list(danceById(dance)['figures']).firstWhere((f) => f['id'] == id);
+      for (final d in ['slow_waltz', 'quickstep']) {
+        final note = figure(d, 'natural_spin_turn')['note_ru'] as String;
+        expect(note, contains('пивот назад'), reason: d);
+        expect(note, contains('при редких кадрах'), reason: d);
+      }
+      expect(figure('slow_waltz', 'natural_turn')['note_ru'],
+          contains('без пивота'));
+    });
   });
 
   group('providers.json', () {
@@ -226,6 +246,33 @@ void main() {
       for (final p in placeholders) {
         expect(text, contains(p), reason: p);
       }
+    });
+
+    test('время моментов не запрашивается (ни в шаблонах, ни в схеме)', () {
+      for (final path in [
+        for (final name in files) 'assets/prompts/$name',
+        'assets/report.schema.json',
+      ]) {
+        final text = File(path).readAsStringSync();
+        expect(text, isNot(contains('м:сс от начала')), reason: path);
+        expect(text, isNot(contains('момент м:сс')), reason: path);
+      }
+      final system =
+          File('assets/prompts/analysis_system.md').readAsStringSync();
+      expect(system, contains('Время (таймкоды, м:сс) не указывай.'));
+      // Метки времени кадров остаются — для сопоставления с музыкой.
+      expect(File('assets/prompts/input_frames.md').readAsStringSync(),
+          contains('t=12.50'));
+    });
+
+    test('музыка: слух важнее анализа; низкая уверенность — осторожно', () {
+      final system =
+          File('assets/prompts/analysis_system.md').readAsStringSync();
+      expect(system, contains('верь своему слуху'));
+      expect(system, contains('«Уверенность анализа: низкая»'));
+      expect(system, contains('не ставь `confidence: "high"`'));
+      expect(File('assets/prompts/input_video.md').readAsStringSync(),
+          contains('Анализ музыки ниже — подсказка'));
     });
   });
 }

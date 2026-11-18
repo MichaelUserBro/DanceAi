@@ -101,9 +101,17 @@ class FfmpegMediaTool implements MediaTool {
   }
 
   /// Аппаратный H.264 системы, запасной — встроенный MPEG-4 Part 2
-  /// (в сборке без GPL нет libx264).
+  /// (в сборке без GPL нет libx264). У `h264_mediacodec` режим битрейта
+  /// задаём явно: по умолчанию его выбирает прошивка, и часть телефонов
+  /// (Realme) не держит `-b:v` (~1,4 Мбит/с вместо 0,5). CBR умеют не все —
+  /// тогда VBR, затем как есть.
   static List<String> get defaultEncoders => Platform.isAndroid
-      ? const ['h264_mediacodec', 'mpeg4']
+      ? const [
+          'h264_mediacodec:cbr',
+          'h264_mediacodec:vbr',
+          'h264_mediacodec',
+          'mpeg4',
+        ]
       : Platform.isWindows
           ? const ['h264_mf', 'mpeg4']
           : const ['mpeg4'];
@@ -120,13 +128,18 @@ class FfmpegMediaTool implements MediaTool {
     final encoders =
         options.encoders.isEmpty ? defaultEncoders : options.encoders;
     final s = options.shortSidePx;
-    MediaToolException? last;
-    for (final codec in encoders) {
-      cancel.throwIfCancelled();
-      try {
+    final source = await _resolve(input);
+    return pickLightVideo(
+      encoders: encoders,
+      outFile: outFile,
+      maxTotalKbps: options.maxTotalKbps,
+      durationSec: durationSec,
+      encode: (spec, path) async {
+        cancel.throwIfCancelled();
+        final (:codec, :mode) = parseEncoder(spec);
         await _run([
           '-v', 'error', '-nostdin', '-y',
-          '-i', await _resolve(input),
+          '-i', source,
           '-sn', '-dn', '-map', '0:v:0', '-map', '0:a:0?',
           '-vf',
           'fps=${options.fps},'
@@ -134,32 +147,32 @@ class FfmpegMediaTool implements MediaTool {
               'format=${codec == 'mpeg4' ? 'yuv420p' : 'nv12'}',
           '-c:v', codec,
           '-b:v', '${options.videoKbps}k',
+          if (mode != null) ...['-bitrate_mode', mode],
           if (codec == 'mpeg4') ...['-qmin', '3', '-qmax', '20'],
           if (codec != 'mpeg4') ...['-g', '${options.fps * 2}'],
           '-c:a', 'aac', '-b:a', '${options.audioKbps}k', '-ac', '1',
           '-ar', '44100',
           '-movflags', '+faststart', '-f', 'mp4',
-          outFile,
+          path,
         ], durationSec, onProgress, cancel);
-        final f = File(outFile);
+        final f = File(path);
         final size = await f.exists() ? await f.length() : 0;
-        if (size == 0) throw MediaToolException('$codec: пустой файл');
-        final info = await probe(outFile);
+        if (size == 0) throw MediaToolException('$spec: пустой файл');
+        final info = await probe(path);
+        // Кодер может «успешно» завершиться без видеодорожки (так делает
+        // h264_mediacodec на эмуляторе) — такая копия не годится.
+        if (info == null || !info.hasVideo || info.width == null) {
+          throw MediaToolException('$spec: в копии нет видеодорожки');
+        }
         return LightVideo(
-          path: outFile,
+          path: path,
           sizeBytes: size,
-          codec: codec,
-          width: info?.width,
-          height: info?.height,
+          codec: spec,
+          width: info.width,
+          height: info.height,
         );
-      } on MediaToolException catch (e) {
-        last = e;
-        try {
-          await File(outFile).delete();
-        } catch (_) {}
-      }
-    }
-    throw last ?? const MediaToolException('нет видеокодера');
+      },
+    );
   }
 
   Future<void> _run(

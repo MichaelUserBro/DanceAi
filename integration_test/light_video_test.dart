@@ -4,6 +4,9 @@
 //   Android: <внешняя папка приложения>/bench
 // Копии пишутся во временную папку и удаляются; при KEEP_DIR — копируются
 // туда (для ручной проверки, что модели их принимают).
+// WAIT_SEC — ждать в папке видео файл-метку `ready` (эмулятор: видео
+// копируются через `adb shell run-as` после установки приложения, а
+// `flutter test` удаляет приложение после прогона).
 //
 //   flutter test integration_test/light_video_test.dart -d windows
 //
@@ -19,6 +22,7 @@ import 'package:path_provider/path_provider.dart';
 
 const _videoDirDefine = String.fromEnvironment('VIDEO_DIR');
 const _keepDir = String.fromEnvironment('KEEP_DIR');
+const _waitSec = int.fromEnvironment('WAIT_SEC');
 
 Future<Directory> _videoDir() async {
   if (_videoDirDefine.isNotEmpty) return Directory(_videoDirDefine);
@@ -33,6 +37,14 @@ void main() {
 
   testWidgets('облегчённая копия: каждый кодек платформы', (tester) async {
     final dir = await _videoDir();
+    if (_waitSec > 0) {
+      print('LIGHT жду видео и метку ready в ${dir.path}');
+      final end = DateTime.now().add(const Duration(seconds: _waitSec));
+      while (!File('${dir.path}/ready').existsSync() &&
+          DateTime.now().isBefore(end)) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+    }
     final files = dir.existsSync()
         ? (dir.listSync().whereType<File>().where((f) =>
                 RegExp(r'\.(mp4|mov)$', caseSensitive: false).hasMatch(f.path))
@@ -51,7 +63,8 @@ void main() {
       for (final file in files) {
         final name = file.uri.pathSegments.last;
         final info = await tool.probe(file.path);
-        final out = '${tmp.path}/${codec}_$name';
+        final safe = codec.replaceAll(':', '-');
+        final out = '${tmp.path}/${safe}_$name';
         final sw = Stopwatch()..start();
         try {
           final r = await tool.transcodeLight(
@@ -68,11 +81,11 @@ void main() {
               '${info?.durationSec?.toStringAsFixed(1)} s '
               '${(file.lengthSync() / 1e6).toStringAsFixed(1)} MB → '
               '${r.width}x${r.height} ${(r.sizeBytes / 1e6).toStringAsFixed(2)} MB '
-              'audio ${back?.hasAudio} | ${sw.elapsedMilliseconds} ms');
+              'audio ${back?.hasAudio} | ${r.codec} | ${sw.elapsedMilliseconds} ms');
           ok[codec] = (ok[codec] ?? 0) + 1;
           expect(back?.hasAudio, isTrue);
           if (_keepDir.isNotEmpty) {
-            await File(r.path).copy('$_keepDir/${codec}_$name');
+            await File(r.path).copy('$_keepDir/${safe}_$name');
           }
           await File(r.path).delete();
         } on MediaToolException catch (e) {

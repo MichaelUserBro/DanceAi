@@ -15,9 +15,9 @@
     { "figure_id": "closed_change_nat_to_rev", "name_ru": "Правая переменка", "name_en": "Closed Change (Natural to Reverse)", "count": 2, "quality": "partial", "confidence": "high", "comment": "Приставка у партнёрши неполная." },
     { "figure_id": "reverse_turn", "name_ru": "Левый поворот", "name_en": "Reverse Turn", "count": 2, "quality": "poor", "confidence": "high", "comment": "Недоворот, пара уходит с линии танца, рамка разъезжается." },
     { "figure_id": "whisk", "name_ru": "Виск", "name_en": "Whisk", "count": 2, "quality": "partial", "confidence": "high", "comment": "Позиция променада открыта слишком широко, голова партнёрши не в линии." },
-    { "figure_id": "chasse_from_pp", "name_ru": "Шоссе (из променада)", "name_en": "Chasse from Promenade Position", "count": 2, "quality": "partial", "confidence": "medium", "comment": "Шоссе на одном уровне, без подъёма." },
+    { "figure_id": "chasse_from_pp", "name_ru": "Шассе (из променада)", "name_en": "Chasse from Promenade Position", "count": 2, "quality": "partial", "confidence": "medium", "comment": "Шассе на одном уровне, без подъёма." },
     { "figure_id": "natural_spin_turn", "name_ru": "Спин", "name_en": "Natural Spin Turn", "count": 1, "quality": "poor", "confidence": "medium", "comment": "Потеря баланса на пивоте, партнёрша отстаёт." },
-    { "figure_id": null, "name_ru": "Поступательное шоссе вправо", "name_en": "Progressive Chasse to Right", "count": 1, "quality": "partial", "confidence": "low", "comment": "Вероятно, это поступательное шоссе вправо; видно частично." }
+    { "figure_id": null, "name_ru": "Поступательное шассе вправо", "name_en": "Progressive Chasse to Right", "count": 1, "quality": "partial", "confidence": "low", "comment": "Вероятно, это поступательное шассе вправо; видно частично." }
   ],
   "criteria_results": [
     { "criterion_id": "music_timing", "couple": "partial", "leader": "partial", "follower": "partial", "comment": "В основном в музыку, но на 0:48–0:55 пара опережает сильную долю." },
@@ -28,7 +28,7 @@
     { "criterion_id": "soft_knees", "couple": "partial", "leader": "good", "follower": "poor", "comment": "Колени партнёрши прямые на шагах назад." },
     { "criterion_id": "clear_closes", "couple": "partial", "leader": "good", "follower": "partial", "comment": "Партнёрша не доводит стопу до опорной в переменках." },
     { "criterion_id": "step_completion", "couple": "partial", "leader": "partial", "follower": "partial", "comment": "Шаг часто обрывается без подготовки к следующему." },
-    { "criterion_id": "swing", "couple": "partial", "leader": "partial", "follower": "partial", "comment": "Свинг есть в правых поворотах, в виске и шоссе корпус прямой." },
+    { "criterion_id": "swing", "couple": "partial", "leader": "partial", "follower": "partial", "comment": "Свинг есть в правых поворотах, в виске и шассе корпус прямой." },
     { "criterion_id": "rise_and_fall", "couple": "poor", "leader": "poor", "follower": "poor", "comment": "Пара движется почти на одном уровне, снижения в конце такта нет." },
     { "criterion_id": "steps_up_toe", "couple": "partial", "leader": "partial", "follower": "partial", "comment": "Шаги на подъёме местами с полной стопы." },
     { "criterion_id": "steps_down_heel", "couple": "poor", "leader": "poor", "follower": "not_visible", "comment": "Партнёр делает шаг вперёд на счёт 1 с носка. Работу стоп партнёрши на шагах вперёд разглядеть нельзя." },

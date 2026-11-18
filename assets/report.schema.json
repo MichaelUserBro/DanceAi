@@ -135,7 +135,7 @@
           "figure_id": { "type": ["string", "null"], "description": "Фигура, в которой видна ошибка, или null." },
           "description": {
             "type": "string",
-            "description": "Что именно не так и где (фигура или момент м:сс)."
+            "description": "Что именно не так и в какой фигуре или части танца."
           }
         }
       }
